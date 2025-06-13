@@ -1,0 +1,25 @@
+{
+  "name": "openai-proxy-function",
+  "version": "1.0.0",
+  "description": "Secure OpenAI API proxy for Chrome extension",
+  "main": "index.js",
+  "engines": {
+    "node": "18"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.0.0",
+    "@google-cloud/secret-manager": "^5.0.0"
+  },
+  "scripts": {
+    "start": "functions-framework --target=openaiProxy",
+    "deploy": "gcloud functions deploy openai-proxy --runtime nodejs18 --trigger-http --allow-unauthenticated --source=. --entry-point=openaiProxy"
+  },
+  "keywords": [
+    "openai",
+    "proxy",
+    "chrome-extension",
+    "google-cloud"
+  ],
+  "author": "",
+  "license": "MIT"
+} 

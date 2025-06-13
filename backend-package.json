@@ -1,0 +1,21 @@
+{
+  "name": "review-responder-backend",
+  "version": "1.0.0",
+  "description": "Simple MVP backend for Review Responder Chrome Extension",
+  "main": "simple-backend.js",
+  "scripts": {
+    "start": "node simple-backend.js",
+    "dev": "nodemon simple-backend.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.7"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["chrome-extension", "openai", "mvp", "backend"],
+  "author": "Your Name",
+  "license": "MIT"
+} 

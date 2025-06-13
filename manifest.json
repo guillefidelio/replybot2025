@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "AI Review Responder",
+  "version": "1.0.0",
+  "description": "Automatically respond to Google My Business reviews using AI-generated responses",
+  
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  
+  "host_permissions": [
+    "https://business.google.com/*",
+    "https://us-central1-review-responder-backend.cloudfunctions.net/*"
+  ],
+  
+  "background": {
+    "service_worker": "src/background/background.js",
+    "type": "module"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": [
+        "https://business.google.com/reviews*",
+        "https://business.google.com/groups/*/reviews*"
+      ],
+      "js": ["src/content/content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "AI Review Responder Settings",
+    "default_icon": "icons/icon.svg"
+  },
+  
+  "icons": {
+    "128": "icons/icon.svg"
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/components/*",
+        "src/assets/*"
+      ],
+      "matches": [
+        "https://business.google.com/*"
+      ]
+    }
+  ],
+  
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self';"
+  }
+} 

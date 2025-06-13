@@ -1,0 +1,42 @@
+/* App-specific styles using Tailwind v4 brand guide */
+#root {
+  @apply max-w-screen-xl mx-auto p-8 text-center font-body;
+}
+
+.logo {
+  @apply h-24 p-6 ai-float;
+  will-change: filter;
+  transition: filter 300ms var(--ease-smooth);
+}
+
+.logo:hover {
+  filter: drop-shadow(0 0 2em var(--color-ai-purple));
+}
+
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em var(--color-ai-blue));
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  @apply card card-hover;
+  padding: 2em;
+}
+
+.read-the-docs {
+  @apply text-slate-500 dark:text-slate-400 text-sm;
+}
