@@ -29,6 +29,7 @@ class ReviewDetector {
   constructor() {
     this.loadSettings();
     this.init();
+    this.setupAuthListener();
   }
 
   private async loadSettings() {
@@ -49,6 +50,60 @@ class ReviewDetector {
     }
   }
 
+  private async checkAuthentication(): Promise<boolean> {
+    try {
+      const result = await chrome.storage.local.get(['authUser']);
+      const isAuthenticated = !!result.authUser;
+      console.log('Authentication check:', isAuthenticated ? 'User authenticated' : 'User not authenticated');
+      return isAuthenticated;
+    } catch (error) {
+      console.error('Error checking authentication:', error);
+      return false;
+    }
+  }
+
+  private setupAuthListener() {
+    // Listen for changes in authentication state
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+      if (namespace === 'local' && changes.authUser) {
+        const wasAuthenticated = !!changes.authUser.oldValue;
+        const isAuthenticated = !!changes.authUser.newValue;
+        
+        console.log('Auth state changed:', { wasAuthenticated, isAuthenticated });
+        
+        if (wasAuthenticated && !isAuthenticated) {
+          // User logged out - remove all AI buttons and bulk controls
+          this.removeAllAIButtons();
+          this.removeBulkControls();
+          console.log('User logged out - removed all AI buttons and bulk controls');
+        } else if (!wasAuthenticated && isAuthenticated) {
+          // User logged in - rescan for reviews and add bulk controls
+          console.log('User logged in - rescanning for reviews and adding bulk controls');
+          setTimeout(() => {
+            this.scanForReviews();
+            this.addBulkProcessingControls();
+          }, 1000);
+        }
+      }
+    });
+  }
+
+  private removeAllAIButtons() {
+    const aiButtons = document.querySelectorAll('.ai-response-button');
+    aiButtons.forEach(button => {
+      button.remove();
+    });
+    console.log(`Removed ${aiButtons.length} AI buttons`);
+  }
+
+  private removeBulkControls() {
+    const bulkControls = document.querySelector('.bulk-processing-controls');
+    if (bulkControls) {
+      bulkControls.remove();
+      console.log('Removed bulk processing controls');
+    }
+  }
+
   private init() {
     // Check if we're on a GMB review page
     if (!this.isGMBReviewPage()) {
@@ -64,7 +119,7 @@ class ReviewDetector {
     this.setupObserver();
 
     // Add bulk processing controls
-    setTimeout(() => this.addBulkProcessingControls(), 3000);
+    setTimeout(async () => await this.addBulkProcessingControls(), 3000);
   }
 
   private isGMBReviewPage(): boolean {
@@ -215,6 +270,13 @@ class ReviewDetector {
     // Don't inject button if review already has a response
     if (reviewData.hasResponse) {
       console.log(`Skipping review ${reviewData.id} - already has response`);
+      return;
+    }
+
+    // Check if user is authenticated before injecting buttons
+    const isAuthenticated = await this.checkAuthentication();
+    if (!isAuthenticated) {
+      console.log(`Skipping review ${reviewData.id} - user not authenticated`);
       return;
     }
 
@@ -472,9 +534,16 @@ class ReviewDetector {
     }, 4000);
   }
 
-  private addBulkProcessingControls() {
+  private async addBulkProcessingControls() {
     // Check if controls already exist
     if (document.querySelector('.bulk-processing-controls')) {
+      return;
+    }
+
+    // Check if user is authenticated before showing bulk controls
+    const isAuthenticated = await this.checkAuthentication();
+    if (!isAuthenticated) {
+      console.log('Skipping bulk controls - user not authenticated');
       return;
     }
 

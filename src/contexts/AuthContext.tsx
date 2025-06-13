@@ -129,8 +129,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
       console.log('Auth state changed:', user ? 'User signed in' : 'User signed out');
       
       if (user) {
-        // User signed in - sync prompts from cloud
+        // User signed in - store auth state and sync prompts from cloud
         try {
+          // Store user authentication state for content script access
+          await chrome.storage.local.set({ 
+            authUser: {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName
+            }
+          });
+          console.log('User auth state stored in Chrome storage');
+          
           await PromptSyncService.syncOnLogin(user);
           console.log('Prompts synced successfully on login');
         } catch (error) {
@@ -138,7 +148,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
           // Continue with authentication even if prompt sync fails
         }
       } else {
-        // User signed out - prompts already cleared by signOut function
+        // User signed out - clear auth state and prompts
+        try {
+          await chrome.storage.local.remove(['authUser']);
+          console.log('User auth state cleared from Chrome storage');
+        } catch (error) {
+          console.error('Error clearing auth state:', error);
+        }
         console.log('User signed out, prompts cleared');
       }
       
