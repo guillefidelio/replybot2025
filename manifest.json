@@ -3,7 +3,6 @@
   "name": "AI Review Responder",
   "version": "1.0.0",
   "description": "Automatically respond to Google My Business reviews using AI-generated responses",
-  "key": "kffcknmfbfgjedbabgnllnmjomobhogd",
   
   "permissions": [
     "activeTab",

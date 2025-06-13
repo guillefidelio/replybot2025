@@ -11,6 +11,7 @@ import {
 } from 'firebase/auth';
 import { auth } from '../firebase';
 import type { AuthContextType, FirebaseError } from '../types/firebase';
+import { PromptSyncService } from '../services/PromptSyncService';
 
 // Create the context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -69,9 +70,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
-  // Sign out function
+  // Sign out function with prompt sync
   async function signOut(): Promise<void> {
     try {
+      // Perform final sync before signing out if user exists
+      if (user) {
+        try {
+          await PromptSyncService.syncOnLogout(user);
+          console.log('Final prompt sync completed before logout');
+        } catch (syncError) {
+          console.error('Error during final sync on logout:', syncError);
+          // Continue with logout even if sync fails
+        }
+      }
+      
       await firebaseSignOut(auth);
     } catch (error) {
       const firebaseError = error as FirebaseError;
@@ -111,9 +123,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }
 
-  // Set up auth state listener
+  // Set up auth state listener with prompt sync
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      console.log('Auth state changed:', user ? 'User signed in' : 'User signed out');
+      
+      if (user) {
+        // User signed in - sync prompts from cloud
+        try {
+          await PromptSyncService.syncOnLogin(user);
+          console.log('Prompts synced successfully on login');
+        } catch (error) {
+          console.error('Failed to sync prompts on login:', error);
+          // Continue with authentication even if prompt sync fails
+        }
+      } else {
+        // User signed out - prompts already cleared by signOut function
+        console.log('User signed out, prompts cleared');
+      }
+      
       setUser(user);
       setLoading(false);
     });

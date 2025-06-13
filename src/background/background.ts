@@ -231,7 +231,7 @@ async function handleGenerateResponse(
       promptTemplate = data.prompt;
     } else {
       const keyBase = rating.toString();
-      const variant = hasText ? 'with_text' : 'no_text';
+              const variant = hasText ? 'text' : 'no_text';
       const altVariant = hasText ? 'text' : 'no_text';
       const possibleKeys = [`${keyBase}_${variant}`, `${keyBase}_${altVariant}`];
       for (const k of possibleKeys) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { PopupAuthWrapper } from '../components/Auth/PopupAuthWrapper';
+import { PromptSyncService } from '../services/PromptSyncService';
 import DataManager from '../components/DataManager';
 import StorageQuota from '../components/StorageQuota';
 import '../index.css';
@@ -251,16 +252,36 @@ const PromptsTab: React.FC<{
   validationErrors: ValidationError[];
   onShowDataManager: () => void;
 }> = ({ settings, onUpdateSettings, validationErrors, onShowDataManager }) => {
+  const { user } = useAuth();
   const [prompts, setPrompts] = useState<{ [key: string]: string }>({});
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(PromptSyncService.getSyncStatus());
 
   useEffect(() => {
-    if (settings?.prompts) {
-      setPrompts(settings.prompts);
-      setHasUnsavedChanges(false);
-    }
-  }, [settings]);
+    // Subscribe to sync status changes
+    const unsubscribe = PromptSyncService.onSyncStatusChange(setSyncStatus);
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    // Load effective prompts (local or defaults)
+    const loadPrompts = async () => {
+      try {
+        const effectivePrompts = await PromptSyncService.getEffectivePrompts();
+        setPrompts(effectivePrompts);
+        setHasUnsavedChanges(false);
+      } catch (error) {
+        console.error('Error loading prompts:', error);
+        // Fallback to settings prompts if available
+        if (settings?.prompts) {
+          setPrompts(settings.prompts);
+        }
+      }
+    };
+
+    loadPrompts();
+  }, [settings, user]);
 
   const handlePromptChange = (rating: string, value: string) => {
     const newPrompts = { ...prompts, [rating]: value };
@@ -269,38 +290,24 @@ const PromptsTab: React.FC<{
   };
 
   const handleSavePrompts = async () => {
-    if (!settings) return;
+    if (!user) {
+      console.error('User not authenticated');
+      return;
+    }
     
     setIsSaving(true);
     try {
-      // Normalize keys to *_with_text or *_no_text
-      const normalized: { [key:string]: string } = {};
-      Object.entries(prompts).forEach(([key, value]) => {
-        let k = key.trim();
-        // convert legacy individual keys to standard pattern
-        if (/positivePrompt(\d)WithText/i.test(k)) {
-          k = k.match(/positivePrompt(\d)WithText/i)![1] + '_with_text';
-        } else if (/positivePrompt(\d)WithoutText/i.test(k)) {
-          k = k.match(/positivePrompt(\d)WithoutText/i)![1] + '_no_text';
-        } else if (/neutralPrompt3WithText/i.test(k)) {
-          k = '3_with_text';
-        } else if (/neutralPrompt3WithoutText/i.test(k)) {
-          k = '3_no_text';
-        } else if (/negativePrompt1_2WithText/i.test(k)) {
-          k = '2_with_text';
-        } else if (/negativePrompt1_2WithoutText/i.test(k)) {
-          k = '2_no_text';
-        }
-        // fix any accidental duplicate substrings
-        k = k.replace('_with_with_text', '_with_text').replace('__', '_');
-        normalized[k] = value;
-      });
-
-      await onUpdateSettings({
-        ...settings,
-        prompts: normalized
-      });
+      // Use the prompt sync service for authenticated users
+      await PromptSyncService.savePrompts(user, prompts);
       setHasUnsavedChanges(false);
+      
+      // Also update legacy settings for backward compatibility
+      if (settings) {
+        await onUpdateSettings({
+          ...settings,
+          prompts
+        });
+      }
     } catch (error) {
       console.error('Failed to save prompts:', error);
     } finally {
@@ -309,11 +316,14 @@ const PromptsTab: React.FC<{
   };
 
   const ratingLabels = {
-    '5_text': '⭐⭐⭐⭐⭐ (With Text)',
-    '5_no_text': '⭐⭐⭐⭐⭐ (No Text)',
-    '4_text': '⭐⭐⭐⭐ (With Text)',
-    '4_no_text': '⭐⭐⭐⭐ (No Text)',
-    '1-3_stars': '⭐⭐⭐ and below'
+    '5_text': '⭐⭐⭐⭐⭐ 5-Star Reviews (with text)',
+    '5_no_text': '⭐⭐⭐⭐⭐ 5-Star Reviews (no text)',
+    '4_text': '⭐⭐⭐⭐ 4-Star Reviews (with text)',
+    '4_no_text': '⭐⭐⭐⭐ 4-Star Reviews (no text)',
+    '3_text': '⭐⭐⭐ 3-Star Reviews (with text)',
+    '3_no_text': '⭐⭐⭐ 3-Star Reviews (no text)',
+    '2_text': '⭐⭐ 1-2 Star Reviews (with text)',
+    '2_no_text': '⭐⭐ 1-2 Star Reviews (no text)'
   };
 
   const getError = (field: string) => validationErrors.find(e => e.field === field);
@@ -326,17 +336,56 @@ const PromptsTab: React.FC<{
           Customize your response templates for different star ratings and review types. The AI will use these as guidelines.
         </p>
         
+        {/* Sync Status Indicator */}
+        {user && (
+          <div className="mb-4 p-3 bg-slate-50 dark:bg-slate-800 rounded-md">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {syncStatus.isSyncing ? (
+                  <>
+                    <div className="loading-spinner h-4 w-4"></div>
+                    <span className="text-sm text-slate-600 dark:text-slate-400">Syncing to cloud...</span>
+                  </>
+                ) : syncStatus.error ? (
+                  <>
+                    <span className="text-red-500">⚠️</span>
+                    <span className="text-sm text-red-600 dark:text-red-400">Sync error</span>
+                  </>
+                ) : syncStatus.hasUnsavedChanges ? (
+                  <>
+                    <span className="text-yellow-500">●</span>
+                    <span className="text-sm text-yellow-600 dark:text-yellow-400">Unsaved changes</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-green-500">✓</span>
+                    <span className="text-sm text-green-600 dark:text-green-400">Synced to cloud</span>
+                  </>
+                )}
+              </div>
+              {syncStatus.lastSync && (
+                <span className="text-xs text-slate-500 dark:text-slate-400">
+                  {syncStatus.lastSync.toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+            {syncStatus.error && (
+              <p className="mt-2 text-xs text-red-600 dark:text-red-400">{syncStatus.error}</p>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-4 mb-6">
           <button
             onClick={handleSavePrompts}
-            disabled={!hasUnsavedChanges || isSaving}
+            disabled={!hasUnsavedChanges || isSaving || !user}
             className={`btn-primary ${
-              hasUnsavedChanges && !isSaving
+              hasUnsavedChanges && !isSaving && user
                 ? 'bg-emerald-600 hover:bg-emerald-700'
                 : 'bg-slate-300 dark:bg-slate-600 text-slate-500 dark:text-slate-400 cursor-not-allowed'
             }`}
           >
-            {isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save Prompts' : 'Saved'}
+            {isSaving ? 'Saving & Syncing...' : !user ? 'Sign in to save' : hasUnsavedChanges ? 'Save & Sync' : 'Saved'}
           </button>
           <button
             onClick={onShowDataManager}

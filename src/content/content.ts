@@ -961,7 +961,7 @@ const generateAIResponse = async (review: OpenAIReview): GenerateResponsePromise
         const storedPrompts = (result.prompts || {}) as Record<string, string>;
         if (Object.keys(storedPrompts).length > 0) {
           const keyBase = review.score.toString();
-          const variant = textHasContent ? 'with_text' : 'no_text';
+          const variant = textHasContent ? 'text' : 'no_text';
           const altVariant = textHasContent ? 'text' : 'no_text';
           const possibleKeys = [`${keyBase}_${variant}`, `${keyBase}_${altVariant}`];
           for (const k of possibleKeys) {
