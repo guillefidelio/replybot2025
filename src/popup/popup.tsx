@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { PopupAuthWrapper } from '../components/Auth/PopupAuthWrapper';
 import DataManager from '../components/DataManager';
 import StorageQuota from '../components/StorageQuota';
 import '../index.css';
@@ -40,6 +42,45 @@ const sendMessage = (message: any): Promise<any> => {
       resolve(response);
     });
   });
+};
+
+// Header Component with Authentication
+const PopupHeader: React.FC = () => {
+  const { user, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Failed to sign out:', error);
+    }
+  };
+
+  return (
+    <div className="header bg-gradient-to-r from-violet-600 to-blue-600 text-white p-4">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-xl font-bold">AI Review Responder</h1>
+          <p className="text-sm opacity-90">OpenAI-Powered Response Generation via Secure Cloud Backend</p>
+        </div>
+        {user && (
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <p className="text-xs opacity-90">Signed in as:</p>
+              <p className="text-sm font-medium">{user.displayName || user.email}</p>
+            </div>
+            <button
+              onClick={handleSignOut}
+              className="text-xs bg-white/20 hover:bg-white/30 px-2 py-1 rounded transition-colors"
+              title="Sign Out"
+            >
+              Sign Out
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 // Tab Navigation Component
@@ -648,8 +689,8 @@ const HelpTab: React.FC = () => {
   );
 };
 
-// Main Popup Component
-const PopupApp: React.FC = () => {
+// Main Popup Component (Authenticated Content)
+const AuthenticatedPopupApp: React.FC = () => {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [settings, setSettings] = useState<ExtensionSettings | null>(null);
   const [apiStatus, setApiStatus] = useState<ApiStatus>({ isConnected: false });
@@ -720,10 +761,7 @@ const PopupApp: React.FC = () => {
 
   return (
     <div className="extension-popup">
-      <div className="gradient-ai-primary text-white p-4 shadow-ai-glow">
-        <h1 className="text-2xl font-semibold leading-tight">AI Review Responder</h1>
-        <p className="text-sm font-normal leading-relaxed opacity-90">OpenAI-Powered Response Generation via Secure Cloud Backend</p>
-      </div>
+      <PopupHeader />
 
       <div className="flex-1 flex flex-col min-h-0">
         <div className="p-4 border-b border-slate-200 dark:border-slate-700">
@@ -777,9 +815,33 @@ const PopupApp: React.FC = () => {
   );
 };
 
-// Initialize the popup
+// Main Popup Component with Authentication
+const PopupApp: React.FC = () => {
+  const { user, loading } = useAuth();
+
+  // Show loading spinner while checking authentication state
+  if (loading) {
+    return (
+      <div className="extension-popup flex items-center justify-center min-h-[500px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-600 mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Conditional rendering based on authentication state
+  return user ? <AuthenticatedPopupApp /> : <PopupAuthWrapper />;
+};
+
+// Initialize the popup with AuthProvider
 const container = document.getElementById('root');
 if (container) {
   const root = createRoot(container);
-  root.render(<PopupApp />);
+  root.render(
+    <AuthProvider>
+      <PopupApp />
+    </AuthProvider>
+  );
 }

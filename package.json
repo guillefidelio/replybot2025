@@ -21,6 +21,7 @@
     "zip:extension": "cd dist && powershell Compress-Archive -Path * -DestinationPath ../ai-review-responder.zip -Force"
   },
   "dependencies": {
+    "firebase": "^11.9.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
