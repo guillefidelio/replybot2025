@@ -28,8 +28,10 @@ export default defineConfig({
         popup: path.resolve(__dirname, 'src/popup/popup.html'),
         // Background service worker
         background: path.resolve(__dirname, 'src/background/background.ts'),
-        // Content script
+        // Original Content script
         content: path.resolve(__dirname, 'src/content/content.ts'),
+        // New Google Content script
+        content_script_google: path.resolve(__dirname, 'src/content/content_script_google.ts'),
       },
       output: {
         entryFileNames: (chunk) => {
@@ -39,6 +41,9 @@ export default defineConfig({
           }
           if (chunk.name === 'content') {
             return 'src/content/content.js';
+          }
+          if (chunk.name === 'content_script_google') {
+            return 'src/content/content_script_google.js';
           }
           return 'src/[name]/[name].js';
         },
