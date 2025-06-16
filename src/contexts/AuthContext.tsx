@@ -12,6 +12,7 @@ import {
 import { auth } from '../firebase';
 import type { AuthContextType, FirebaseError } from '../types/firebase';
 import { PromptSyncService } from '../services/PromptSyncService';
+import { UserService } from '../services/UserService';
 
 // Create the context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -41,11 +42,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setLoading(true);
       const result = await createUserWithEmailAndPassword(auth, email, password);
       
-      // Optionally update the user's profile
+      // Update the user's profile and create Firestore document
       if (result.user) {
         await updateProfile(result.user, {
           displayName: email.split('@')[0] // Use part of email as display name
         });
+        
+        // Automatically create user document in Firestore
+        await UserService.createUserDocument(result.user);
+        console.log('User document created successfully on signup');
       }
     } catch (error) {
       const firebaseError = error as FirebaseError;
@@ -129,8 +134,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       console.log('Auth state changed:', user ? 'User signed in' : 'User signed out');
       
       if (user) {
-        // User signed in - store auth state and sync prompts from cloud
+        // User signed in - ensure user document exists and update last login
         try {
+          // Ensure user document exists (handles both new and existing users)
+          await UserService.ensureUserDocument(user);
+          
           // Store user authentication state for content script access
           await chrome.storage.local.set({ 
             authUser: {
@@ -144,8 +152,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           await PromptSyncService.syncOnLogin(user);
           console.log('Prompts synced successfully on login');
         } catch (error) {
-          console.error('Failed to sync prompts on login:', error);
-          // Continue with authentication even if prompt sync fails
+          console.error('Failed to handle user login:', error);
+          // Continue with authentication even if user document creation or prompt sync fails
         }
       } else {
         // User signed out - clear auth state and prompts
