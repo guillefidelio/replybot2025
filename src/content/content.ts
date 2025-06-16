@@ -1,7 +1,7 @@
 // Chrome extension content script for Google My Business review pages
 // Detects reviews and injects "Respond with AI" buttons
 
-import { IFRAME_TYPES, CONFIG, IframeConfig } from '../config/config';
+import { IFRAME_TYPES, CONFIG, type IframeConfig } from '../config/config';
 
 interface ReviewData {
   id: string;
@@ -78,7 +78,7 @@ class ReviewDetector {
     this.clickHandlers = {
       // For SINGLEREVIEW, the existing flow via scanForReviews -> injectAIButton -> handleAIButtonClick
       // is already in place. The generic injectButtonWithRetry is NOT currently used by SINGLEREVIEW.
-      SINGLEREVIEW: (event, type, cfg, el) => {
+      SINGLEREVIEW: (_event, _type, _cfg, _el) => { // Prefixed parameters with underscores
           console.warn("SINGLEREVIEW click handler called through generic path - this is unexpected if scanForReviews is active.");
           // This is where an adapter would be needed if we forced SINGLEREVIEW through generic injectButton.
       },
@@ -161,16 +161,6 @@ class ReviewDetector {
   }
 
   private init() {
-    // Check if we're on a GMB review page
-    if (!this.isGMBReviewPage()) {
-      return;
-    }
-
-    console.log('AI Review Responder initialized on GMB review page');
-
-    // Initial scan with delay to allow page to load
-    setTimeout(() => this.scanForReviews(), 2000);
-
     // Set up observer for dynamically loaded content
     // this.setupObserver(); // Old observer removed
 
@@ -189,12 +179,6 @@ class ReviewDetector {
     // Note: addBulkProcessingControls is now called within handlePageOrUrlChange
     // based on iframeType.
   }
-
-  // private isGMBReviewPage(): boolean { // No longer directly used in init
-  //   const url = window.location.href;
-  //   return url.includes('business.google.com/reviews') ||
-  //          (url.includes('business.google.com/groups/') && url.includes('/reviews'));
-  // }
 
   private detectIframeType(url: string): string | null {
     console.log('Detecting iframe type for URL:', url);
@@ -496,7 +480,7 @@ class ReviewDetector {
 
     const aiButton = event.currentTarget as HTMLElement;
     const textSpan = aiButton.querySelector('span.VfPpkd-vQzf8d'); // More specific selector for the text span
-    const iconSpan = aiButton.querySelector('div.VfPpkd-RLmnJb'); // Or another way to get icon
+    // const iconSpan = aiButton.querySelector('div.VfPpkd-RLmnJb'); // Or another way to get icon
 
     if (textSpan) textSpan.textContent = 'Generating...';
     // Icon handling for VfPpkd buttons might involve changing classes or innerHTML of the icon div
@@ -534,7 +518,7 @@ class ReviewDetector {
       this.showNotification(`Error: ${error instanceof Error ? error.message : 'Failed to get AI response.'}`, 'error');
     } finally {
       if (textSpan) textSpan.textContent = config.buttonText;
-      // Reset icon placeholder
+      // Reset icon placeholder // Removed iconSpan related lines
       aiButton.removeAttribute('disabled');
       aiButton.style.opacity = '1';
     }
