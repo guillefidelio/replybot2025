@@ -1,6 +1,8 @@
 // Chrome extension content script for Google My Business review pages
 // Detects reviews and injects "Respond with AI" buttons
 
+import { IFRAME_TYPES, CONFIG, IframeConfig } from '../config/config';
+
 interface ReviewData {
   id: string;
   reviewer: string;
@@ -20,16 +22,70 @@ interface ExtensionSettings {
   maxPages: number;
 }
 
+// Placed at file level for simplicity, similar to the guide.
+function adaptiveDebounce<T extends (...args: any[]) => void>(
+  func: T,
+  initialWait = CONFIG.WAIT.DEBOUNCE, // Use from new config
+  activityThreshold = 5
+): (...args: Parameters<T>) => void {
+  let timeout: number | undefined;
+  let activityCount = 0;
+  let currentWait = initialWait;
+
+  return function (...args: Parameters<T>) {
+    activityCount++;
+
+    if (activityCount > activityThreshold) {
+      currentWait = Math.max(initialWait / 2, 50); // e.g., 150ms or 50ms
+    } else {
+      currentWait = initialWait;
+    }
+
+    const later = () => {
+      clearTimeout(timeout);
+      activityCount = 0; // Reset activity count after function execution
+      func(...args);
+    };
+
+    clearTimeout(timeout);
+    timeout = window.setTimeout(later, currentWait); // Ensure window.setTimeout for browser environment
+  };
+}
+
 class ReviewDetector {
   private observer: MutationObserver | null = null;
   private processedReviews = new Set<string>();
   private settings: ExtensionSettings | null = null;
+  private buttonInjectedStates: { [key: string]: boolean } = {}; // Added
+  private observersInitialized = false; // Added
   private isProcessingBulk = false;
+  private clickHandlers: {
+    [key: string]: (event: MouseEvent, iframeType: string, config: IframeConfig, container?: HTMLElement) => void
+  } = {};
 
   constructor() {
     this.loadSettings();
+    // Initialize buttonInjectedStates for known iframe types
+    for (const type in IFRAME_TYPES) {
+      this.buttonInjectedStates[type] = false;
+    }
+    this.initializeClickHandlers(); // Call before init or where appropriate
     this.init();
     this.setupAuthListener();
+  }
+
+  private initializeClickHandlers() {
+    this.clickHandlers = {
+      // For SINGLEREVIEW, the existing flow via scanForReviews -> injectAIButton -> handleAIButtonClick
+      // is already in place. The generic injectButtonWithRetry is NOT currently used by SINGLEREVIEW.
+      SINGLEREVIEW: (event, type, cfg, el) => {
+          console.warn("SINGLEREVIEW click handler called through generic path - this is unexpected if scanForReviews is active.");
+          // This is where an adapter would be needed if we forced SINGLEREVIEW through generic injectButton.
+      },
+      GOOGLE_COM_REVIEWS: this.handleGenericReviewAction.bind(this), // Bind 'this'
+      // Add other handlers here
+    };
+    console.log("Click handlers initialized:", this.clickHandlers);
   }
 
   private async loadSettings() {
@@ -116,45 +172,443 @@ class ReviewDetector {
     setTimeout(() => this.scanForReviews(), 2000);
 
     // Set up observer for dynamically loaded content
-    this.setupObserver();
+    // this.setupObserver(); // Old observer removed
 
     // Add bulk processing controls
-    setTimeout(async () => await this.addBulkProcessingControls(), 3000);
+    // setTimeout(async () => await this.addBulkProcessingControls(), 3000); // Moved to handlePageOrUrlChange
+
+    console.log('AI Review Responder initializing...');
+    this.setupNewObserver(); // Call the new observer setup
+
+    // Initial check after a delay, similar to the guide's initializeWithDelay
+    setTimeout(() => {
+        console.log('Delayed initial check starting...');
+        this.handlePageOrUrlChange(window.location.href);
+    }, 2000); // 2 second delay
+
+    // Note: addBulkProcessingControls is now called within handlePageOrUrlChange
+    // based on iframeType.
   }
 
-  private isGMBReviewPage(): boolean {
-    const url = window.location.href;
-    return url.includes('business.google.com/reviews') || 
-           (url.includes('business.google.com/groups/') && url.includes('/reviews'));
-  }
+  // private isGMBReviewPage(): boolean { // No longer directly used in init
+  //   const url = window.location.href;
+  //   return url.includes('business.google.com/reviews') ||
+  //          (url.includes('business.google.com/groups/') && url.includes('/reviews'));
+  // }
 
-  private setupObserver() {
-    this.observer = new MutationObserver((mutations) => {
-      let shouldScan = false;
-      
-      mutations.forEach((mutation) => {
-        // Check if new review elements were added - using previous working selector
-        mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === Node.ELEMENT_NODE) {
-            const element = node as HTMLElement;
-            if (element.matches('.GYpYWe') || element.querySelector('.GYpYWe')) {
-              shouldScan = true;
-            }
-          }
-        });
-      });
-
-      if (shouldScan) {
-        setTimeout(() => this.scanForReviews(), 500);
+  private detectIframeType(url: string): string | null {
+    console.log('Detecting iframe type for URL:', url);
+    for (const [type, config] of Object.entries(IFRAME_TYPES)) {
+      if (url.includes(config.urlPart)) {
+        console.log(`Detected iframe type: ${type} for URL: ${url}`);
+        return type;
       }
+    }
+    console.log(`No matching iframe type found for URL: ${url}`);
+    return null;
+  }
+
+  private resetButtonInjectedState(iframeType?: string) {
+    if (iframeType) {
+      console.log(`Resetting button injected state for ${iframeType}`);
+      this.buttonInjectedStates[iframeType] = false;
+    } else {
+      console.log('Resetting all button injected states');
+      for (const type in IFRAME_TYPES) {
+        this.buttonInjectedStates[type] = false;
+      }
+    }
+    // Potentially remove buttons from DOM as well if any are present
+    this.removeAllAIButtons(); // Assuming this function removes all types of AI buttons
+  }
+
+  private async handlePageOrUrlChange(url: string) {
+    console.log('Handling page or URL change. New URL:', url);
+    // Reset relevant states. If a specific iframe was active, reset it.
+    // For simplicity, we can reset all, or implement more granular resets later.
+    this.resetButtonInjectedState(); // Or pass a specific type if known
+
+    const iframeType = this.detectIframeType(url);
+
+    if (!iframeType) {
+      console.log('No relevant iframe type detected on this page/URL. Aborting further action.');
+      this.removeBulkControls(); // Assuming bulk controls are only for specific pages
+      return;
+    }
+
+    console.log(`${iframeType} detected. Starting button injection process.`);
+    const config = IFRAME_TYPES[iframeType];
+
+    // Ensure bulk controls are added if this iframe type should have them
+    // This might need more specific logic based on iframeType
+    if (iframeType === 'SINGLEREVIEW') { // Example: only add bulk for GMB
+        await this.addBulkProcessingControls();
+    } else {
+        this.removeBulkControls(); // Remove if not applicable to this iframe type
+    }
+
+    // Existing scanForReviews is specific to GMB's structure.
+    // For a generic approach, we'd call a generic button injection function here.
+    // For now, let's assume SINGLEREVIEW will use its existing scanForReviews,
+    // and new types will use a new injectButton logic.
+
+    if (iframeType === 'SINGLEREVIEW') {
+      // The existing scanForReviews and injectAIButton are tailored for SINGLEREVIEW.
+      // We might need to call injectButtonWithRetry directly later for other types.
+      this.scanForReviews(); // This function already handles button injection for GMB.
+    } else {
+      // Placeholder for new iframe types:
+      // const clickHandler = clickHandlers[iframeType]; // clickHandlers to be defined later
+      // if (clickHandler) {
+      //   await this.injectButtonWithRetry(config.buttonText, clickHandler, iframeType);
+      // } else {
+      //   console.error(`No click handler found for ${iframeType}`);
+      // }
+      // console.log(`Button injection for ${iframeType} would happen here.`);
+      const clickHandler = this.clickHandlers && this.clickHandlers[iframeType]; // this.clickHandlers to be defined in next step
+      if (clickHandler) {
+        console.log(`Attempting to inject button for ${iframeType} using generic injector.`);
+        await this.injectButtonWithRetry(config.buttonText, clickHandler, iframeType);
+      } else {
+        console.error(`No click handler defined for iframeType: ${iframeType}. Cannot inject button.`);
+      }
+    }
+  }
+
+  private createGenericAIButton(buttonText: string, iframeType: string): HTMLElement {
+    const button = document.createElement('button');
+    // Using a common class for all AI injected buttons for easier removal or selection
+    button.className = `ai-inject-button ai-inject-button-${iframeType} VfPpkd-LgbsSe VfPpkd-LgbsSe-OWXEXe-k8QpJ VfPpkd-LgbsSe-OWXEXe-dgl2Hf nCP5yc AjY5Oe LQeN7 TUT4y`; // Classes from guide, plus type-specific
+    button.innerHTML = `
+      <div class="VfPpkd-Jh9lGc"></div>
+      <div class="VfPpkd-J1Ukfc-LhBDec"></div>
+      <div class="VfPpkd-RLmnJb"></div>
+      <span class="VfPpkd-vQzf8d">${buttonText}</span>
+    `;
+    button.setAttribute('data-injected', 'true');
+    button.setAttribute('data-iframe-type', iframeType);
+
+    // Add hover effect similar to the existing createAIButton
+    button.addEventListener('mouseenter', () => {
+      button.style.backgroundColor = '#1557b0'; // Example hover color
+    });
+    button.addEventListener('mouseleave', () => {
+      button.style.backgroundColor = '#1a73e8'; // Example normal color
+    });
+    button.style.backgroundColor = '#1a73e8'; // Initial background color
+    button.style.border = 'none';
+    button.style.borderRadius = '4px';
+    button.style.color = 'white';
+    button.style.cursor = 'pointer';
+    button.style.fontSize = '14px';
+    button.style.fontWeight = '500';
+    button.style.padding = '10px 16px';
+    button.style.transition = 'background-color 0.2s';
+    button.style.marginLeft = '8px'; // Consistent margin
+
+    return button;
+  }
+
+  private async injectButton(
+    buttonText: string,
+    onClickHandler: (event: MouseEvent, iframeType: string, config: IframeConfig, container?: HTMLElement) => void,
+    iframeType: string
+  ): Promise<boolean> {
+    if (this.buttonInjectedStates[iframeType]) {
+      console.log(`Button already marked as injected for ${iframeType}. If it's missing, there might be an issue.`);
+      // Check if button actually exists, if not, allow re-injection.
+      const config = IFRAME_TYPES[iframeType];
+      const containerForCheck = config.containerSelector ? document.querySelector(config.containerSelector) : document.body;
+      if (containerForCheck && containerForCheck.querySelector(`.ai-inject-button[data-iframe-type="${iframeType}"]`)) {
+           console.log(`Confirmed: AI button already exists in DOM for ${iframeType}`);
+           return true;
+      } else {
+          console.log(`Button was marked injected, but not found in DOM for ${iframeType}. Allowing re-injection.`);
+          this.buttonInjectedStates[iframeType] = false; // Reset state
+      }
+    }
+
+    console.log(`Attempting to inject button for ${iframeType}`);
+    const isAuthenticated = await this.checkAuthentication();
+    if (!isAuthenticated) {
+      console.log('User is not logged in. Skipping button injection.');
+      return false;
+    }
+
+    const config = IFRAME_TYPES[iframeType];
+    if (!config) {
+      console.error(`No configuration found for iframe type: ${iframeType}`);
+      return false;
+    }
+
+    const container = document.querySelector(config.containerSelector);
+    if (!container) {
+      console.log(`Container (${config.containerSelector}) not found for ${iframeType}`);
+      return false;
+    }
+
+    // Check again for existing button inside the found container
+    const existingButton = container.querySelector(`.ai-inject-button[data-iframe-type="${iframeType}"]`);
+    if (existingButton) {
+      console.log(`AI button already exists in container for ${iframeType}`);
+      this.buttonInjectedStates[iframeType] = true;
+      return true;
+    }
+
+    const referenceButton = container.querySelector(config.referenceButtonSelector);
+    if (!referenceButton) {
+      console.log(`Reference button (${config.referenceButtonSelector}) not found for ${iframeType} in container ${config.containerSelector}`);
+      return false;
+    }
+
+    const newButton = this.createGenericAIButton(buttonText, iframeType);
+    newButton.addEventListener('click', (event) => {
+      // Pass container to click handler for context, similar to guide's handleReviewAction
+      onClickHandler(event, iframeType, config, container as HTMLElement);
     });
 
-    // Start observing
-    this.observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+    referenceButton.parentNode?.insertBefore(newButton, referenceButton.nextSibling);
+
+    console.log(`${buttonText} button added successfully for ${iframeType}`);
+    this.buttonInjectedStates[iframeType] = true;
+    return true;
   }
+
+  private async injectButtonWithRetry(
+    buttonText: string,
+    onClickHandler: (event: MouseEvent, iframeType: string, config: IframeConfig, container?: HTMLElement) => void,
+    iframeType: string,
+    maxRetries = CONFIG.WAIT.MAX_RETRIES,
+    delay = CONFIG.WAIT.RETRY_DELAY
+  ): Promise<boolean> {
+    for (let i = 0; i < maxRetries; i++) {
+      console.log(`Injection attempt ${i + 1}/${maxRetries} for ${iframeType}`);
+      const injected = await this.injectButton(buttonText, onClickHandler, iframeType);
+      if (injected) {
+        console.log(`Button successfully injected for ${iframeType} on attempt ${i + 1}`);
+        return true;
+      }
+      console.log(`Injection attempt ${i + 1} failed for ${iframeType}. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    console.error(`Failed to inject button for ${iframeType} after ${maxRetries} attempts`);
+    return false;
+  }
+
+  private async handleGenericReviewAction(
+    event: MouseEvent,
+    iframeType: string,
+    config: IframeConfig,
+    container?: HTMLElement
+  ) {
+    console.log(`Generic review action triggered for iframeType: ${iframeType}`, { event, config, container });
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!container) {
+      console.error(`No container element provided for ${iframeType}. Cannot proceed.`);
+      this.showNotification(`Error: Missing review container for ${iframeType}.`, 'error');
+      return;
+    }
+
+    // 1. Extract review data using selectors from 'config' relative to 'container'
+    // Example:
+    // const reviewerName = container.querySelector(config.reviewerNameSelector!)?.textContent?.trim() || 'Anonymous';
+    // const reviewText = container.querySelector(config.reviewTextSelector!)?.textContent?.trim() || '';
+    // const starRating = this.extractStarRatingFromContainer(container.querySelector(config.starRatingSelector!), config); // Needs a new helper
+
+    // console.log(`Placeholder: Extract review data for ${iframeType} using selectors:`, {
+    //   reviewerNameSelector: config.reviewerNameSelector,
+    //   reviewTextSelector: config.reviewTextSelector,
+    //   starRatingSelector: config.starRatingSelector,
+    // });
+
+    // Remove or comment out this dummy data:
+    // const dummyReviewData = {
+    //   id: `review-${iframeType}-${Date.now()}`,
+    //   reviewer: `Reviewer for ${iframeType}`,
+    //   rating: 5, // Placeholder
+    //   text: `This is a review text from ${iframeType}.`,
+    //   hasResponse: false,
+    //   element: container
+    // };
+    // console.log('Using dummy review data:', dummyReviewData);
+
+    // Add actual data extraction:
+    let reviewerName = 'Anonymous';
+    if (config.reviewerNameSelector) {
+      const nameElement = container.querySelector(config.reviewerNameSelector) || document.querySelector(config.reviewerNameSelector);
+      reviewerName = nameElement?.textContent?.trim() || 'Anonymous';
+    }
+
+    let reviewText = '';
+    if (config.reviewTextSelector) {
+      const textElement = container.querySelector(config.reviewTextSelector) || document.querySelector(config.reviewTextSelector);
+      reviewText = textElement?.textContent?.trim() || '';
+    }
+
+    let starRating = 0; // Default to 0 if not found or error
+    if (config.starRatingSelector) {
+      const ratingElement = container.querySelector(config.starRatingSelector) || document.querySelector(config.starRatingSelector);
+      if (ratingElement) {
+        // Assuming this.extractRating can be used.
+        // extractRating expects an HTMLElement which is the direct container of stars.
+        starRating = this.extractRating(ratingElement as HTMLElement);
+      } else {
+        console.warn(`Star rating element not found with selector: ${config.starRatingSelector}`);
+        // Fallback or default rating can be set here if desired, e.g., 5 stars
+        starRating = 5; // Defaulting to 5 as per original extractRating's fallback behavior.
+      }
+    }
+
+    const actualReviewData = {
+      id: `review-${iframeType}-${Date.now()}`, // Generate a dynamic ID
+      reviewer: reviewerName,
+      rating: starRating,
+      text: reviewText,
+      hasResponse: false, // Assuming button means no response yet
+      element: container // The container or a more specific review element
+    };
+    console.log('Extracted actual review data:', actualReviewData);
+
+
+    // 2. Find the textarea using config.textAreaSelector or config.textAreaJsName
+    let textArea: HTMLElement | null = null;
+    if (config.textAreaSelector) {
+      textArea = container.querySelector(config.textAreaSelector) || document.querySelector(config.textAreaSelector);
+    } else if (config.textAreaJsName) {
+      textArea = container.querySelector(`[jsname="${config.textAreaJsName}"]`) || document.querySelector(`[jsname="${config.textAreaJsName}"]`);
+    }
+
+    if (!textArea) {
+      console.error(`Textarea not found for ${iframeType} using selectors:`, {
+        textAreaSelector: config.textAreaSelector,
+        textAreaJsName: config.textAreaJsName,
+      });
+      this.showNotification(`Error: Response textarea not found for ${iframeType}.`, 'error');
+      return;
+    }
+    console.log(`Found textarea for ${iframeType}:`, textArea);
+
+    // 3. Call AI response generation (similar to handleAIButtonClick)
+    // This part reuses logic from handleAIButtonClick but needs the actual reviewData
+    // For now, we'll simulate the call with dummy data.
+
+    const aiButton = event.currentTarget as HTMLElement;
+    const textSpan = aiButton.querySelector('span.VfPpkd-vQzf8d'); // More specific selector for the text span
+    const iconSpan = aiButton.querySelector('div.VfPpkd-RLmnJb'); // Or another way to get icon
+
+    if (textSpan) textSpan.textContent = 'Generating...';
+    // Icon handling for VfPpkd buttons might involve changing classes or innerHTML of the icon div
+    // For simplicity, we'll skip detailed icon updates for now. console.log('Icon update placeholder');
+    aiButton.setAttribute('disabled', 'true');
+    aiButton.style.opacity = '0.7';
+
+    try {
+      // Update the AI Review object to use actualReviewData
+      const aiReview: OpenAIReview = {
+        author: actualReviewData.reviewer,
+        score: actualReviewData.rating,
+        content: actualReviewData.text,
+      };
+      const response = await generateAIResponse(aiReview); // Ensure generateAIResponse is accessible
+
+      if (!response.success) {
+        throw new Error(response.error || 'Unknown error from AI service');
+      }
+      const responseText = response.data.responseText;
+      console.log(`Generated AI response for ${iframeType}:`, responseText);
+
+      // 4. Fill the textarea
+      if (textArea.tagName === 'TEXTAREA') {
+        (textArea as HTMLTextAreaElement).value = responseText;
+        textArea.dispatchEvent(new Event('input', { bubbles: true }));
+      } else { // For contenteditable div
+        textArea.textContent = responseText;
+        textArea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      this.showNotification(`AI response inserted for ${iframeType}! Please review.`, 'info');
+
+    } catch (error) {
+      console.error(`Error generating AI response for ${iframeType}:`, error);
+      this.showNotification(`Error: ${error instanceof Error ? error.message : 'Failed to get AI response.'}`, 'error');
+    } finally {
+      if (textSpan) textSpan.textContent = config.buttonText;
+      // Reset icon placeholder
+      aiButton.removeAttribute('disabled');
+      aiButton.style.opacity = '1';
+    }
+  }
+
+  private setupNewObserver() { // Renamed to avoid conflict if you run incrementally
+    if (this.observersInitialized) {
+      console.log('Observers already initialized.');
+      return;
+    }
+
+    // The guide uses document.querySelector(SELECTORS.FOOTER) || document.body;
+    // For a more general approach that doesn't rely on a specific footer:
+    const targetNode = document.body;
+    const observerConfig = { childList: true, subtree: true };
+
+    let lastUrl = window.location.href;
+
+    const debouncedHandler = adaptiveDebounce((mutations: MutationRecord[], _observerInstance: MutationObserver) => {
+      const currentUrl = window.location.href;
+      let significantChange = false;
+
+      if (currentUrl !== lastUrl) {
+        console.log(`URL changed. Old: ${lastUrl}, New: ${currentUrl}`);
+        lastUrl = currentUrl;
+        significantChange = true;
+      } else {
+        // Check if there were actual additions/removals that might indicate new content
+        if (mutations.some(mutation => mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)) {
+          console.log('DOM content changed (nodes added/removed).');
+          significantChange = true;
+        }
+      }
+
+      if (significantChange) {
+        this.handlePageOrUrlChange(currentUrl);
+      }
+    }, CONFIG.WAIT.DEBOUNCE); // Using debounce value from config
+
+    const observer = new MutationObserver(debouncedHandler);
+    observer.observe(targetNode, observerConfig);
+
+    this.observersInitialized = true;
+    this.observer = observer; // Store the observer instance if you need to disconnect it later in destroy()
+    console.log('New observers initialized and watching for URL and content changes.');
+  }
+
+  // private setupObserver() { // OLD OBSERVER - KEPT FOR REFERENCE IF NEEDED
+  //   this.observer = new MutationObserver((mutations) => {
+  //     let shouldScan = false;
+
+  //     mutations.forEach((mutation) => {
+  //       // Check if new review elements were added - using previous working selector
+  //       mutation.addedNodes.forEach((node) => {
+  //         if (node.nodeType === Node.ELEMENT_NODE) {
+  //           const element = node as HTMLElement;
+  //           if (element.matches('.GYpYWe') || element.querySelector('.GYpYWe')) {
+  //             shouldScan = true;
+  //           }
+  //         }
+  //       });
+  //     });
+
+  //     if (shouldScan) {
+  //       setTimeout(() => this.scanForReviews(), 500);
+  //     }
+  //   });
+
+  //   // Start observing
+  //   this.observer.observe(document.body, {
+  //     childList: true,
+  //     subtree: true
+  //   });
+  // }
 
   private scanForReviews() {
     console.log('Scanning for reviews...');
@@ -901,11 +1355,13 @@ class ReviewDetector {
   }
 
   public destroy() {
-    if (this.observer) {
+    if (this.observer) { // Assuming this.observer stores the MutationObserver instance
       this.observer.disconnect();
       this.observer = null;
+      this.observersInitialized = false; // Reset flag
+      console.log('MutationObserver disconnected.');
     }
-    this.processedReviews.clear();
+    this.processedReviews.clear(); // Keep this
   }
 }
 
@@ -929,12 +1385,25 @@ if (document.readyState === 'loading') {
 
 // Reinitialize on page visibility change (handles tab switching and page refresh)
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && window.location.href.includes('business.google.com/reviews')) {
-    // Small delay to ensure page is fully loaded
+  // More generic check, not just GMB reviews
+  if (!document.hidden) {
+    // Small delay to ensure page is fully loaded and to prevent rapid re-init
     setTimeout(() => {
-      if (!reviewDetector || !chrome.runtime?.id) {
-        console.log('Reinitializing review detector...');
-        initializeDetector();
+      // Check if the extension is still running (e.g. not been disabled)
+      if (chrome.runtime && chrome.runtime.id) {
+        // Check if a detector exists and if its observer is perhaps disconnected
+        // or if the URL implies it should be active but isn't.
+        // For simplicity, we can re-trigger the main handler.
+        // A more robust check might be needed if re-init is too aggressive.
+        if (reviewDetector) {
+          console.log('Visibility changed to visible, re-evaluating page state.');
+          // reviewDetector.handlePageOrUrlChange(window.location.href); // This might be too frequent
+        } else {
+          console.log('Reinitializing review detector due to visibility change.');
+          initializeDetector();
+        }
+      } else {
+        console.log('Extension runtime not available, skipping re-init on visibility change.');
       }
     }, 1000);
   }

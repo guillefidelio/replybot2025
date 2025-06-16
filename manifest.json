@@ -14,7 +14,8 @@
     "https://business.google.com/*",
     "https://us-central1-review-responder-backend.cloudfunctions.net/*",
     "https://*.firebaseapp.com/*",
-    "https://*.googleapis.com/*"
+    "https://*.googleapis.com/*",
+    "*://*.google.com/*"
   ],
   
   "background": {
@@ -26,7 +27,8 @@
     {
       "matches": [
         "https://business.google.com/reviews*",
-        "https://business.google.com/groups/*/reviews*"
+        "https://business.google.com/groups/*/reviews*",
+        "*://*.google.com/*reviews*"
       ],
       "js": ["src/content/content.js"],
       "run_at": "document_end"
@@ -50,7 +52,8 @@
         "src/assets/*"
       ],
       "matches": [
-        "https://business.google.com/*"
+        "https://business.google.com/*",
+        "*://*.google.com/*"
       ]
     }
   ],
