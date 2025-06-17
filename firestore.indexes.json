@@ -1,0 +1,51 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "creditTransactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+    // Add other composite indexes here if needed as the application grows.
+    // For example, if you need to query users by subscriptionId and another field:
+    // {
+    //   "collectionGroup": "users",
+    //   "queryScope": "COLLECTION",
+    //   "fields": [
+    //     { "fieldPath": "subscriptionId", "order": "ASCENDING" },
+    //     { "fieldPath": "createdAt", "order": "DESCENDING" }
+    //   ]
+    // }
+  ],
+  "fieldOverrides": [
+    // Field overrides can be used to exempt specific fields from single-field indexing
+    // or to configure indexing for specific fields in arrays or maps.
+    // Example:
+    // {
+    //   "collectionGroup": "users",
+    //   "fieldPath": "activeFeatures", // Assuming activeFeatures is an array
+    //   "indexes": [
+    //     {
+    //       "order": "ASCENDING",
+    //       "queryScope": "COLLECTION_GROUP" // Or "COLLECTION"
+    //     },
+    //     {
+    //       "order": "DESCENDING",
+    //       "queryScope": "COLLECTION_GROUP"
+    //     },
+    //     {
+    //       "arrayConfig": "CONTAINS",
+    //       "queryScope": "COLLECTION_GROUP"
+    //     }
+    //   ]
+    // }
+  ]
+}

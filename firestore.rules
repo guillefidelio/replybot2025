@@ -1,0 +1,56 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users collection
+    match /users/{userId} {
+      // Allow users to read their own document
+      allow read: if request.auth.uid == userId;
+
+      // Allow authenticated users to create their own user document during signup
+      allow create: if request.auth.uid == userId;
+
+      // Allow users to update their own non-sensitive profile data (e.g., displayName)
+      // Sensitive fields like credits, subscriptionId, subscriptionStatus, activeFeatures, paddleCustomerId
+      // should only be updatable by backend functions (or admin roles, not covered here).
+      allow update: if request.auth.uid == userId &&
+                       !('credits' in request.resource.data) &&
+                       !('subscriptionId' in request.resource.data) &&
+                       !('subscriptionStatus' in request.resource.data) &&
+                       !('activeFeatures' in request.resource.data) &&
+                       !('paddleCustomerId' in request.resource.data);
+
+      // Disallow client-side deletion of user documents
+      allow delete: if false;
+
+      // Credit Transactions subcollection
+      match /creditTransactions/{transactionId} {
+        // Allow users to read their own credit transactions
+        allow read: if request.auth.uid == userId;
+
+        // Only backend functions should be able to create credit transactions.
+        // Client-side creation could lead to users giving themselves credits.
+        // For now, deny client 'create'. This will be handled by Cloud Functions.
+        allow create: if false; // To be updated if specific backend role/service account is used
+
+        // Transactions are immutable from client-side
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // Analytics subcollection (placeholder, assuming it might be added later)
+      // match /analytics/{analyticsId} {
+      //   // Define rules based on whether users can read their own analytics
+      //   // or if it's backend-only.
+      //   allow read, write: if false; // Example: backend-only access
+      // }
+    }
+
+    // General Rules (example, adjust as needed for other collections)
+    // Deny all reads/writes to other collections by default if not specified
+    // match /{document=**} {
+    //   allow read, write: if false;
+    // }
+  }
+}

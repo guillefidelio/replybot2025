@@ -41,15 +41,37 @@ const mockChrome = {
 (global as any).chrome = mockChrome;
 
 // Mock window.location for content script tests
-Object.defineProperty(window, 'location', {
-  value: {
-    href: 'https://business.google.com/reviews',
-    pathname: '/reviews',
-    search: '',
-    hash: '',
-  },
-  writable: true,
-});
+const mockLocation = {
+  href: 'https://business.google.com/reviews',
+  pathname: '/reviews',
+  search: '',
+  hash: '',
+  assign: jest.fn(),
+  replace: jest.fn(),
+  reload: jest.fn(),
+  ancestorOrigins: {} as DOMStringList,
+  origin: 'https://business.google.com',
+  protocol: 'https:',
+  host: 'business.google.com',
+  hostname: 'business.google.com',
+  port: '',
+  toString: () => mockLocation.href,
+  valueOf: () => mockLocation,
+};
+
+// Try to make window.location writable by first deleting it, then re-assigning.
+// This might still not work in all jsdom versions or configurations.
+try {
+  delete (window as any).location;
+  (window as any).location = mockLocation;
+} catch (error) {
+  console.error('Failed to mock window.location directly, trying spyOn:', error);
+  // Fallback to spyOn if direct assignment fails (though spyOn might also have limitations for location)
+  // This is more of a conceptual fallback as spyOn typically works on properties/methods not the object itself.
+  // A more robust solution might involve configuring jsdom at a lower level if this still fails.
+  jest.spyOn(window, 'location', 'get').mockReturnValue(mockLocation);
+}
+
 
 // Mock console methods to reduce noise in tests
 global.console = {
