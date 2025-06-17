@@ -13,6 +13,7 @@ import { auth } from '../firebase';
 import type { AuthContextType, FirebaseError } from '../types/firebase';
 import { PromptSyncService } from '../services/PromptSyncService';
 import { UserService } from '../services/UserService';
+import { UserMigrationService } from '../services/UserMigrationService';
 
 // Create the context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -139,6 +140,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
           // Ensure user document exists (handles both new and existing users)
           await UserService.ensureUserDocument(user);
           
+          // Check and migrate user to new payment system if needed
+          const migrationResult = await UserMigrationService.checkAndMigrateUser(user);
+          if (migrationResult.migrated) {
+            console.log(`User ${user.email} successfully migrated to payment system`);
+          } else if (!migrationResult.success) {
+            console.warn(`Migration check failed for user ${user.email}:`, migrationResult.error);
+            // Continue with login even if migration fails
+          }
+          
           // Store user authentication state for content script access
           await chrome.storage.local.set({ 
             authUser: {
@@ -153,7 +163,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           console.log('Prompts synced successfully on login');
         } catch (error) {
           console.error('Failed to handle user login:', error);
-          // Continue with authentication even if user document creation or prompt sync fails
+          // Continue with authentication even if user document creation, migration, or prompt sync fails
         }
       } else {
         // User signed out - clear auth state and prompts

@@ -14,6 +14,36 @@ const log = (message: string, data?: LogData) => {
   }
 };
 
+// Function to broadcast credit updates to all extension components
+const broadcastCreditUpdate = async (creditData?: any) => {
+  try {
+    // Send message to all tabs and extension pages
+    chrome.runtime.sendMessage({
+      type: 'CREDIT_UPDATED',
+      action: 'creditUpdate',
+      data: creditData
+    }).catch(() => {
+      // Ignore errors if no listeners
+    });
+    
+    // Also send to content scripts on active tabs
+    const tabs = await chrome.tabs.query({});
+    tabs.forEach(tab => {
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'CREDIT_UPDATED',
+          action: 'creditUpdate',
+          data: creditData
+        }).catch(() => {
+          // Ignore errors if tab doesn't have content script
+        });
+      }
+    });
+  } catch (error) {
+    log('Error broadcasting credit update:', error);
+  }
+};
+
 // Rate limiting management
 let lastRequestTime = 0;
 let requestCount = 0;
@@ -123,6 +153,12 @@ chrome.runtime.onMessage.addListener((message: IncomingMessage, _sender, sendRes
   log('Background received message:', message);
   const msgType: string | undefined = message.type ?? message.action; // fallback
   switch (msgType) {
+    case 'checkCredits': {
+      const data = (message as IncomingMessage).data as { operation: string };
+      handleCheckCredits(data, sendResponse as ChromeSendResponse);
+      return true;
+    }
+    
     case 'GENERATE_RESPONSE':
     case 'GENERATE_AI_RESPONSE':
     case 'generateResponse': {
@@ -160,6 +196,12 @@ chrome.runtime.onMessage.addListener((message: IncomingMessage, _sender, sendRes
       testApiConnection(sendResponse);
       return true;
       
+    case 'openUpgradeFlow':
+      // Open the extension popup for upgrade flow
+      chrome.action.openPopup();
+      sendResponse({ success: true });
+      return true;
+      
     // Removed VALIDATE_USER for MVP simplicity
       
     default:
@@ -195,12 +237,99 @@ async function initializeDefaultSettings(): Promise<void> {
   }
 }
 
-// Handle AI response generation using OpenAI API
+// Handle credit checking
+async function handleCheckCredits(
+  data: { operation: string },
+  sendResponse: ChromeSendResponse
+): Promise<void> {
+  try {
+    log('Checking credits for operation:', data.operation);
+    
+    // Get current user authentication
+    const authResult = await chrome.storage.local.get(['authUser']);
+    if (!authResult.authUser) {
+      sendResponse({
+        success: false,
+        error: 'User not authenticated'
+      });
+      return;
+    }
+
+    // Send credit check request to the Cloud Function
+    const creditCheckUrl = 'https://us-central1-replybot25.cloudfunctions.net/getCreditStatusHttp';
+    const requestBody = {
+      operation: data.operation,
+      userId: authResult.authUser.uid,
+      userEmail: authResult.authUser.email
+    };
+
+    log('Sending credit check request:', requestBody);
+
+    const response = await fetch(creditCheckUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      log('Credit check failed:', { status: response.status, error: errorText });
+      sendResponse({
+        success: false,
+        error: `Credit check failed: ${response.status} ${response.statusText}`
+      });
+      return;
+    }
+
+    const creditData = await response.json();
+    log('Credit check response:', creditData);
+
+    const responseData = {
+      hasCredits: creditData.hasCredits || false,
+      available: creditData.available || 0,
+      total: creditData.total || 10,
+      required: creditData.required || 1,
+      canProceed: creditData.canProceed || false,
+      message: creditData.message || '',
+      plan: creditData.plan || 'free',
+      resetDate: creditData.resetDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+    };
+
+    sendResponse({
+      success: true,
+      data: responseData
+    });
+
+    // Broadcast credit update for real-time updates
+    await broadcastCreditUpdate(responseData);
+
+  } catch (error) {
+    log('Error checking credits:', error);
+    sendResponse({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error checking credits'
+    });
+  }
+}
+
+// Handle AI response generation using OpenAI API (now with credit consumption)
 async function handleGenerateResponse(
   data: { reviewData?: ReviewData; review?: SimpleReview; promptType?: string; prompt?: string },
   sendResponse: ChromeSendResponse
 ): Promise<void> {
   try {
+    // Get current user authentication
+    const authResult = await chrome.storage.local.get(['authUser']);
+    if (!authResult.authUser) {
+      sendResponse({
+        success: false,
+        error: 'User not authenticated'
+      });
+      return;
+    }
+
     // Normalize reviewData
     let reviewData: ReviewData | undefined = data.reviewData;
     if (!reviewData && data.review) {
@@ -255,7 +384,14 @@ async function handleGenerateResponse(
     log('User prompt:', userPrompt);
     log('=== END AI PROMPT ===');
 
-    const responseText = await generateSaaSResponse(systemPrompt, userPrompt);
+    // Generate the AI response (this will consume credits)
+    const responseText = await generateSaaSResponseWithCreditConsumption(
+      systemPrompt, 
+      userPrompt, 
+      authResult.authUser.uid,
+      authResult.authUser.email,
+      reviewData
+    );
 
     sendResponse({
       success: true,
@@ -271,7 +407,145 @@ async function handleGenerateResponse(
   }
 }
 
-// Google Cloud Function API call with retry logic
+// Google Cloud Function API call with credit consumption
+async function generateSaaSResponseWithCreditConsumption(
+  systemPrompt: string, 
+  userPrompt: string, 
+  userId: string,
+  userEmail: string,
+  reviewData: ReviewData,
+  retryCount = 0
+): Promise<string> {
+  const maxRetries = 3;
+  const baseDelay = 2000; // 2 seconds base delay
+  
+  log(`Generating response with credit consumption (attempt ${retryCount + 1}/${maxRetries + 1})`, { 
+    userId, 
+    userEmail, 
+    reviewId: reviewData.id 
+  });
+  
+  try {
+    // Check rate limits before making request
+    await checkRateLimit();
+    
+    // Use the consume credit endpoint that handles both credit checking and AI generation
+    const consumeCreditUrl = 'https://us-central1-replybot25.cloudfunctions.net/consumeCreditHttp';
+    const requestBody = {
+      // User information
+      userId,
+      userEmail,
+      
+      // Operation details
+      operation: 'individual_response',
+      
+      // Review data for analytics
+      reviewData: {
+        id: reviewData.id,
+        reviewer: reviewData.reviewer,
+        rating: reviewData.rating,
+        text: reviewData.text
+      },
+      
+      // AI generation parameters
+      aiRequest: {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        max_tokens: 300,
+        temperature: 0.7
+      }
+    };
+
+    log('=== CONSUME CREDIT API REQUEST ===');
+    log('API URL:', consumeCreditUrl);
+    log('Request body:', JSON.stringify(requestBody, null, 2));
+    log('=== END API REQUEST ===');
+    
+    const response = await fetch(consumeCreditUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorMessage = await handleApiError(response);
+      
+      // Check if this is a retryable error
+      if (response.status === 429 || response.status >= 500) {
+        if (retryCount < maxRetries) {
+          const retryDelay = baseDelay * Math.pow(2, retryCount); // Exponential backoff
+          log(`Retryable error (${response.status}). Retrying in ${retryDelay}ms...`);
+          await delay(retryDelay);
+          return generateSaaSResponseWithCreditConsumption(
+            systemPrompt, 
+            userPrompt, 
+            userId, 
+            userEmail, 
+            reviewData, 
+            retryCount + 1
+          );
+        }
+      }
+      
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    log('Response received from consume credit function:', data);
+    
+    // Check if the response indicates success
+    if (!data.success) {
+      throw new Error(data.error || 'Credit consumption failed');
+    }
+    
+    // Extract the AI response text
+    if (data.data && data.data.responseText) {
+      log('AI response generated successfully with credit consumption');
+      
+      // Broadcast credit update to all extension components
+      if (data.data.creditInfo) {
+        await broadcastCreditUpdate(data.data.creditInfo);
+      }
+      
+      return data.data.responseText;
+    } else {
+      log('Unexpected response format:', data);
+      throw new Error('Unexpected response format from credit consumption function');
+    }
+    
+  } catch (error) {
+    log('Error generating AI response with credit consumption:', error);
+    
+    // If this was a network error and we haven't exceeded retries, try again
+    if (error instanceof TypeError && error.message.includes('fetch') && retryCount < maxRetries) {
+      const retryDelay = baseDelay * Math.pow(2, retryCount);
+      log(`Network error. Retrying in ${retryDelay}ms...`);
+      await delay(retryDelay);
+      return generateSaaSResponseWithCreditConsumption(
+        systemPrompt, 
+        userPrompt, 
+        userId, 
+        userEmail, 
+        reviewData, 
+        retryCount + 1
+      );
+    }
+    
+    // For the final attempt or non-retryable errors, throw with detailed message
+    if (retryCount >= maxRetries) {
+      throw new Error(`Failed to generate AI response after ${maxRetries + 1} attempts: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+    
+    throw error;
+  }
+}
+
+// Google Cloud Function API call with retry logic (fallback for non-credit operations)
 async function generateSaaSResponse(systemPrompt: string, userPrompt: string, retryCount = 0): Promise<string> {
   const maxRetries = 3;
   const baseDelay = 2000; // 2 seconds base delay

@@ -26,7 +26,19 @@ function createAIButton(config: ConfigEntry, iframeType: string): HTMLElement {
   button.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    handleAIButtonClick(config);
+    // Convert config to SiteRule format for compatibility
+    const siteRule = {
+      id: iframeType, // Use iframeType as unique identifier
+      urlPattern: config.urlPattern,
+      host: config.host,
+      excludePattern: config.excludePattern,
+      priority: config.priority,
+      injectButton: config.injectButton,
+      containerSelector: config.containerSelector,
+      referenceButtonSelector: config.referenceButtonSelector,
+      buttonText: config.buttonText
+    };
+    handleAIButtonClick(siteRule);
   });
 
   return button;

@@ -9,11 +9,29 @@ import {
 import { db } from '../firebase';
 import type { User } from 'firebase/auth';
 import type { UserProfile } from '../types/firebase';
+import type { 
+  SubscriptionInfo, 
+  CreditInfo, 
+  FeatureAccess, 
+  UserPreferences 
+} from '../types/payment';
+import { 
+  DEFAULT_USER_SUBSCRIPTION, 
+  DEFAULT_USER_CREDITS, 
+  DEFAULT_USER_FEATURES, 
+  DEFAULT_USER_PREFERENCES 
+} from '../types/payment';
 
-export interface FirestoreUserProfile extends Omit<UserProfile, 'createdAt' | 'lastLoginAt'> {
+export interface FirestoreUserProfile extends Omit<UserProfile, 'createdAt' | 'lastLoginAt' | 'subscription' | 'credits'> {
   createdAt: Timestamp;
   lastLoginAt: Timestamp;
   updatedAt: Timestamp;
+  
+  // Payment-related fields with Firestore Timestamp objects
+  subscription?: SubscriptionInfo;
+  credits?: CreditInfo;
+  features?: FeatureAccess;
+  preferences?: UserPreferences;
 }
 
 export class UserService {
@@ -26,12 +44,31 @@ export class UserService {
       const userDocSnapshot = await getDoc(userDocRef);
       
       if (!userDocSnapshot.exists()) {
+        // Create default subscription with proper Timestamp conversion
+        const defaultSubscription: SubscriptionInfo = {
+          ...DEFAULT_USER_SUBSCRIPTION,
+          currentPeriodStart: serverTimestamp() as Timestamp,
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) as any,
+        };
+
+        // Create default credits with proper Timestamp conversion
+        const defaultCredits: CreditInfo = {
+          ...DEFAULT_USER_CREDITS,
+          resetDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) as any,
+        };
+
         const userData: Omit<FirestoreUserProfile, 'updatedAt'> = {
           uid: user.uid,
           email: user.email || '',
           displayName: user.displayName || '',
           createdAt: serverTimestamp() as Timestamp,
           lastLoginAt: serverTimestamp() as Timestamp,
+          
+          // Payment-related fields with defaults
+          subscription: defaultSubscription,
+          credits: defaultCredits,
+          features: DEFAULT_USER_FEATURES,
+          preferences: DEFAULT_USER_PREFERENCES,
         };
 
         await setDoc(userDocRef, {
@@ -39,7 +76,7 @@ export class UserService {
           updatedAt: serverTimestamp() as Timestamp
         });
         
-        console.log(`Created user document for: ${user.email}`);
+        console.log(`Created user document with payment defaults for: ${user.email}`);
       } else {
         console.log(`User document already exists for: ${user.email}`);
       }
@@ -77,12 +114,23 @@ export class UserService {
       
       if (userDocSnapshot.exists()) {
         const data = userDocSnapshot.data() as FirestoreUserProfile;
+        
+        // Keep payment fields as-is since interfaces now support both Date and Timestamp
+        const subscription = data.subscription;
+        const credits = data.credits;
+
         return {
           uid: data.uid,
           email: data.email,
           displayName: data.displayName,
           createdAt: data.createdAt?.toDate() || new Date(),
-          lastLoginAt: data.lastLoginAt?.toDate() || new Date()
+          lastLoginAt: data.lastLoginAt?.toDate() || new Date(),
+          
+          // Payment-related fields
+          subscription,
+          credits,
+          features: data.features,
+          preferences: data.preferences,
         };
       }
       
@@ -122,9 +170,18 @@ export class UserService {
       if (!userDocSnapshot.exists()) {
         // Create the document if it doesn't exist
         await this.createUserDocument(user);
+        console.log(`Created new user document with payment defaults for: ${user.email}`);
       } else {
         // Update last login if it exists
         await this.updateLastLogin(user);
+        
+        // Check if the existing document has all required payment fields
+        const userData = userDocSnapshot.data();
+        const needsPaymentFields = !userData.subscription || !userData.credits || !userData.features || !userData.preferences;
+        
+        if (needsPaymentFields) {
+          console.log(`Existing user ${user.email} needs payment field migration - will be handled by UserMigrationService`);
+        }
       }
     } catch (error) {
       console.error('Error ensuring user document:', error);

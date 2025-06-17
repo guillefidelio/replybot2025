@@ -20,11 +20,19 @@ interface ExtensionSettings {
   maxPages: number;
 }
 
+interface CreditCheckResult {
+  hasCredits: boolean;
+  available: number;
+  required: number;
+  message: string;
+  canProceed: boolean;
+}
+
 // Check if the script has already been injected to avoid re-initialization
-if ((window as any).aiReviewResponderInitialized) {
+if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResponderInitialized) {
   console.log('AI Review Responder already initialized. Aborting.');
 } else {
-  (window as any).aiReviewResponderInitialized = true;
+  (window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResponderInitialized = true;
 
   class ReviewDetector {
     private observer: MutationObserver | null = null;
@@ -59,6 +67,183 @@ if ((window as any).aiReviewResponderInitialized) {
           maxPages: 3
         };
       }
+    }
+
+    /**
+     * Check credit availability before processing AI request
+     */
+    private async checkCreditAvailability(): Promise<CreditCheckResult> {
+      try {
+        // Send message to background script to check credits
+        const response = await chrome.runtime.sendMessage({
+          action: 'checkCredits',
+          data: { operation: 'individual_response' }
+        });
+
+        if (response && response.success) {
+          return {
+            hasCredits: response.data.hasCredits,
+            available: response.data.available,
+            required: response.data.required || 1,
+            message: response.data.message || '',
+            canProceed: response.data.canProceed
+          };
+        } else {
+          console.error('[ReviewDetector] Credit check failed:', response?.error);
+          return {
+            hasCredits: false,
+            available: 0,
+            required: 1,
+            message: response?.error || 'Failed to check credit availability',
+            canProceed: false
+          };
+        }
+      } catch (error) {
+        console.error('[ReviewDetector] Error checking credits:', error);
+        return {
+          hasCredits: false,
+          available: 0,
+          required: 1,
+          message: 'Error checking credit availability',
+          canProceed: false
+        };
+      }
+    }
+
+    /**
+     * Show credit exhaustion modal with upgrade options
+     */
+    private showCreditExhaustionModal(creditInfo: CreditCheckResult): Promise<boolean> {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.6);
+          z-index: 10004;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: 'Google Sans', Roboto, Arial, sans-serif;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+          background: white;
+          border-radius: 16px;
+          padding: 32px;
+          max-width: 450px;
+          width: 90%;
+          box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+          color: #333;
+          text-align: center;
+        `;
+
+        const icon = document.createElement('div');
+        icon.style.cssText = `
+          font-size: 48px;
+          margin-bottom: 16px;
+        `;
+        icon.textContent = '💳';
+
+        const title = document.createElement('h2');
+        title.textContent = 'Credits Required';
+        title.style.cssText = 'margin: 0 0 16px 0; font-size: 24px; font-weight: 600; color: #1f2937;';
+
+        const message = document.createElement('p');
+        message.innerHTML = `
+          You need <strong>${creditInfo.required} credit${creditInfo.required > 1 ? 's' : ''}</strong> to generate an AI response.<br>
+          You currently have <strong>${creditInfo.available} credit${creditInfo.available !== 1 ? 's' : ''}</strong> available.
+        `;
+        message.style.cssText = 'margin: 0 0 24px 0; font-size: 16px; line-height: 1.6; color: #6b7280;';
+
+        const upgradeInfo = document.createElement('div');
+        upgradeInfo.style.cssText = `
+          background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+          border-radius: 12px;
+          padding: 20px;
+          margin: 20px 0;
+          text-align: left;
+        `;
+        upgradeInfo.innerHTML = `
+          <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #374151;">🚀 Upgrade Options:</h3>
+          <ul style="margin: 0; padding-left: 20px; color: #6b7280; font-size: 14px; line-height: 1.6;">
+            <li><strong>Starter Plan:</strong> 100 credits/month + bulk processing</li>
+            <li><strong>Professional Plan:</strong> 500 credits/month + advanced features</li>
+            <li><strong>Free Plan:</strong> 10 credits/month (resets monthly)</li>
+          </ul>
+        `;
+
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.cssText = 'display: flex; gap: 12px; justify-content: center; margin-top: 24px;';
+
+        const upgradeButton = document.createElement('button');
+        upgradeButton.textContent = '⬆️ Upgrade Plan';
+        upgradeButton.style.cssText = `
+          padding: 12px 24px;
+          background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: transform 0.2s;
+        `;
+        upgradeButton.onmouseover = () => upgradeButton.style.transform = 'scale(1.05)';
+        upgradeButton.onmouseout = () => upgradeButton.style.transform = 'scale(1)';
+
+        const cancelButton = document.createElement('button');
+        cancelButton.textContent = 'Cancel';
+        cancelButton.style.cssText = `
+          padding: 12px 24px;
+          background: #f9fafb;
+          color: #374151;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+        `;
+
+        const cleanup = () => {
+          if (overlay.parentNode) {
+            overlay.parentNode.removeChild(overlay);
+          }
+        };
+
+        upgradeButton.onclick = () => {
+          cleanup();
+          // Open extension popup for upgrade
+          chrome.runtime.sendMessage({ action: 'openUpgradeFlow' });
+          resolve(false);
+        };
+
+        cancelButton.onclick = () => {
+          cleanup();
+          resolve(false);
+        };
+
+        overlay.onclick = (e) => {
+          if (e.target === overlay) {
+            cleanup();
+            resolve(false);
+          }
+        };
+
+        buttonContainer.appendChild(upgradeButton);
+        buttonContainer.appendChild(cancelButton);
+        modal.appendChild(icon);
+        modal.appendChild(title);
+        modal.appendChild(message);
+        modal.appendChild(upgradeInfo);
+        modal.appendChild(buttonContainer);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+      });
     }
 
     private async checkAuthentication(): Promise<boolean> {
@@ -375,13 +560,41 @@ if ((window as any).aiReviewResponderInitialized) {
       
       if (textSpan && iconSpan) {
         iconSpan.textContent = '⏳';
-        textSpan.textContent = 'Generating...';
+        textSpan.textContent = 'Checking credits...';
       }
       button.setAttribute('disabled', 'true');
       button.style.opacity = '0.7';
 
       try {
-        // Use new generateAIResponse function
+        // STEP 1: Check credit availability first
+        console.log('[ReviewDetector] Checking credit availability before generating response...');
+        const creditCheck = await this.checkCreditAvailability();
+        
+        if (!creditCheck.canProceed) {
+          console.log('[ReviewDetector] Insufficient credits:', creditCheck);
+          
+          // Reset button state
+          if (textSpan && iconSpan) {
+            iconSpan.textContent = '🤖';
+            textSpan.textContent = 'Respond with AI';
+          }
+          button.removeAttribute('disabled');
+          button.style.opacity = '1';
+          
+          // Show credit exhaustion modal
+          await this.showCreditExhaustionModal(creditCheck);
+          return;
+        }
+
+        console.log('[ReviewDetector] Credit check passed, proceeding with AI generation...');
+        
+        // Update button state to generating
+        if (textSpan && iconSpan) {
+          iconSpan.textContent = '⏳';
+          textSpan.textContent = 'Generating...';
+        }
+
+        // STEP 2: Generate AI response (this will consume credits)
         const aiReview: OpenAIReview = {
           author: reviewData.reviewer,
           score: reviewData.rating,
@@ -389,27 +602,40 @@ if ((window as any).aiReviewResponderInitialized) {
         };
         const response = await generateAIResponse(aiReview);
         log('Background script response:', response);
+        
         if (!response.success) {
           throw new Error(response.error);
         }
+        
         const responseText = response.data.responseText;
         console.log('Generated AI response:', responseText);
         
-        // Check if trust mode is enabled
+        // STEP 3: Handle the response based on trust mode
         const trustModeEnabled = this.settings?.trustModes?.individual || false;
         
         if (trustModeEnabled) {
           // Trust mode: auto-fill and auto-submit
           await this.fillResponseAndSubmit(reviewData, responseText, true);
-          this.showNotification('AI response generated and posted automatically!', 'success');
+          this.showNotification(`AI response generated and posted automatically! (${creditCheck.available - 1} credits remaining)`, 'success');
         } else {
           // Preview mode: just fill the response for user review
           await this.fillResponseAndSubmit(reviewData, responseText, false);
-          this.showNotification('AI response generated! Please review and post manually.', 'info');
+          this.showNotification(`AI response generated! Please review and post manually. (${creditCheck.available - 1} credits remaining)`, 'info');
         }
       } catch (error) {
         console.error('Error generating AI response:', error);
-        this.showNotification('Error generating AI response. Please try again.', 'error');
+        
+        // Check if it's a credit-related error
+        if (error instanceof Error && error.message.includes('credit')) {
+          this.showNotification('Credit error: ' + error.message, 'error');
+          // Re-check credits to get updated status
+          const updatedCreditCheck = await this.checkCreditAvailability();
+          if (!updatedCreditCheck.canProceed) {
+            await this.showCreditExhaustionModal(updatedCreditCheck);
+          }
+        } else {
+          this.showNotification('Error generating AI response. Please try again.', 'error');
+        }
       } finally {
         // Reset button state
         if (textSpan && iconSpan) {
@@ -837,6 +1063,43 @@ if ((window as any).aiReviewResponderInitialized) {
         return;
       }
 
+      // STEP 1: Check credit availability for bulk operation
+      console.log('[BulkProcessing] Checking credit availability for bulk operation...');
+      const bulkCreditCheck = await this.checkCreditAvailability();
+      
+      if (!bulkCreditCheck.canProceed) {
+        console.log('[BulkProcessing] Insufficient credits for bulk operation:', bulkCreditCheck);
+        this.showNotification('Insufficient credits for bulk processing!', 'error');
+        await this.showCreditExhaustionModal(bulkCreditCheck);
+        return;
+      }
+
+      // Estimate number of reviews that will be processed
+      const reviewElements = document.querySelectorAll('.GYpYWe');
+      let estimatedReviews = 0;
+      
+      reviewElements.forEach((reviewElement, index) => {
+        const reviewData = this.extractReviewData(reviewElement as HTMLElement, index);
+        if (reviewData && !reviewData.hasResponse) {
+          if (mode === 'positive' && reviewData.rating < 4) {
+            return;
+          }
+          estimatedReviews++;
+        }
+      });
+
+      // Warn if credits might run out during processing
+      if (estimatedReviews > bulkCreditCheck.available) {
+        const shouldContinue = await this.showConfirmationModal(
+          'Credit Warning',
+          `You have ${bulkCreditCheck.available} credits available, but ${estimatedReviews} reviews were found on this page.\n\nProcessing will stop when credits run out. Continue?`
+        );
+        
+        if (!shouldContinue) {
+          return;
+        }
+      }
+
           // Confirm the action with custom modal (iframe-safe)
       const confirmMessage = mode === 'positive' 
         ? `Process all 4-5 star reviews on ${maxPages} page(s) automatically?` 
@@ -890,6 +1153,16 @@ if ((window as any).aiReviewResponderInitialized) {
             try {
               console.log(`Processing review ${i + 1}/${targetReviews.length} on page ${currentPage}:`, review.id);
               
+              // Check credit availability before each review
+              const reviewCreditCheck = await this.checkCreditAvailability();
+              if (!reviewCreditCheck.canProceed) {
+                console.log('[BulkProcessing] Credits exhausted during processing');
+                this.showNotification(`Credits exhausted! Processed ${totalProcessed} reviews before stopping.`, 'error');
+                await this.showCreditExhaustionModal(reviewCreditCheck);
+                this.stopBulkProcessing();
+                return;
+              }
+              
               // Generate AI response
               const aiReview = {
                 author: review.reviewer,
@@ -906,6 +1179,10 @@ if ((window as any).aiReviewResponderInitialized) {
               await this.fillResponseAndSubmit(review, response.data.responseText, true);
               totalProcessed++;
               
+              // Show progress with remaining credits
+              const remainingCredits = reviewCreditCheck.available - 1;
+              this.showNotification(`Review ${i + 1}/${targetReviews.length} processed! (${remainingCredits} credits remaining)`, 'success');
+              
               // Wait for rate limit (except for last review on last page)
               const isLastReviewOnLastPage = (i === targetReviews.length - 1) && (currentPage === maxPages);
               if (!isLastReviewOnLastPage) {
@@ -917,7 +1194,26 @@ if ((window as any).aiReviewResponderInitialized) {
               
             } catch (error) {
               console.error(`Error processing review ${review.id}:`, error);
-              this.showNotification(`Error processing review: ${error}`, 'error');
+              
+              // Check if it's a credit-related error
+              if (error instanceof Error && error.message.includes('credit')) {
+                console.log('[BulkProcessing] Credit error detected, stopping bulk processing');
+                this.showNotification(`Credit error: ${error.message}. Stopping bulk processing.`, 'error');
+                
+                // Re-check credits and show modal if needed
+                const updatedCreditCheck = await this.checkCreditAvailability();
+                if (!updatedCreditCheck.canProceed) {
+                  await this.showCreditExhaustionModal(updatedCreditCheck);
+                }
+                
+                this.stopBulkProcessing();
+                return;
+              } else {
+                this.showNotification(`Error processing review: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+                
+                // Continue with next review for non-credit errors
+                continue;
+              }
             }
           }
         }

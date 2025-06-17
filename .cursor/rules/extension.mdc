@@ -1,0 +1,58 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+description: Chrome Extension Development with Vite, TypeScript, and no chunking
+globs: ["/*.ts", "/.tsx", "**/.js", "/*.jsx", "/.json", "vite.config.", "manifest.json", "package.json"]
+alwaysApply: false
+Chrome Extension Development Rules
+Guidelines for developing Chrome extensions using Vite, TypeScript, and npm build process with strict no-chunking requirements.
+Core Requirements
+
+Build Tool: Vite for development and building
+Language: TypeScript only - all source files must be .ts or .tsx
+Build Output: Single JavaScript files (NO CHUNKING EVER)
+Build Command: Always use npm run build to compile TS to JS
+Target: Chrome Extension Manifest V3
+
+Vite Configuration Requirements
+CRITICAL: Vite config MUST prevent chunking and ensure single file outputs
+
+TypeScript Configuration
+tsconfig.json must target ES2020 or higher
+Enable strict mode
+
+Code Organization Standards
+
+Single Responsibility
+
+Each TypeScript file should have one clear purpose
+Separate concerns: background, content, popup, options
+
+
+No Dynamic Imports
+
+Avoid dynamic imports that could create chunks
+Use static imports only
+Import all dependencies at the top of files
+
+Shared Code
+
+Put reusable code in src/utils/
+Import shared utilities explicitly
+No barrel exports that might cause chunking
+
+Build Validation
+After every npm run build, verify:
+No Chunks: dist/ contains only single .js files, no chunk-*.js files
+File Structure: Output matches expected structure
+File Sizes: Files are reasonably sized (not artificially split)
+Functionality: Extension loads and works in Chrome
+
+Forbidden Practices
+❌ NO code splitting or chunking
+❌ NO dynamic imports in production code
+❌ NO writing JavaScript files directly
+❌ NO complex build pipelines that create chunks
+❌ NO ignoring build output structure

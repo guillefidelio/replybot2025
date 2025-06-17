@@ -5,6 +5,8 @@ import { PopupAuthWrapper } from '../components/Auth/PopupAuthWrapper';
 import { PromptSyncService } from '../services/PromptSyncService';
 import DataManager from '../components/DataManager';
 import StorageQuota from '../components/StorageQuota';
+import { CreditDisplay } from '../components/CreditDisplay';
+import { UpgradeModal } from '../components/UpgradeModal';
 import '../index.css';
 
 
@@ -122,10 +124,17 @@ const DashboardTab: React.FC<{
   apiStatus: ApiStatus;
   onTestConnection: () => void;
   onUpdateSettings: (settings: ExtensionSettings) => void;
-}> = ({ settings, apiStatus, onTestConnection, onUpdateSettings }) => {
+  onShowUpgrade: () => void;
+}> = ({ settings, apiStatus, onTestConnection, onUpdateSettings, onShowUpgrade }) => {
   return (
     <div className="space-y-6">
-              <div className="card p-6 border border-violet-200 dark:border-violet-700">
+      {/* Credit Management Section */}
+      <div className="card p-6 border border-violet-200 dark:border-violet-700">
+        <h2 className="text-2xl font-semibold leading-tight text-violet-700 dark:text-violet-300 mb-6">💳 Credit Management</h2>
+        <CreditDisplay onUpgradeClick={onShowUpgrade} />
+      </div>
+
+      <div className="card p-6 border border-violet-200 dark:border-violet-700">
         <h2 className="text-2xl font-semibold leading-tight text-violet-700 dark:text-violet-300 mb-6">🚀 Extension Status</h2>
         <div className="grid grid-cols-2 gap-4 text-sm font-normal leading-relaxed">
           <div>
@@ -746,11 +755,32 @@ const AuthenticatedPopupApp: React.FC = () => {
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [showDataManager, setShowDataManager] = useState<boolean>(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState<boolean>(false);
+  const [creditInfo, setCreditInfo] = useState<{ available: number; required: number }>({ available: 0, required: 1 });
 
   useEffect(() => {
     loadSettings();
     checkApiConnection();
+    loadCreditInfo();
   }, []);
+
+  const loadCreditInfo = async () => {
+    try {
+      const response = await sendMessage({ 
+        action: 'checkCredits', 
+        data: { operation: 'status_check' } 
+      });
+      
+      if (response && response.success) {
+        setCreditInfo({
+          available: response.data.available || 0,
+          required: response.data.required || 1
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load credit info:', error);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -808,6 +838,16 @@ const AuthenticatedPopupApp: React.FC = () => {
     checkApiConnection();
   };
 
+  const handleShowUpgrade = () => {
+    setShowUpgradeModal(true);
+  };
+
+  const handleCloseUpgrade = () => {
+    setShowUpgradeModal(false);
+    // Refresh credit info after potential upgrade
+    loadCreditInfo();
+  };
+
   return (
     <div className="extension-popup">
       <PopupHeader />
@@ -825,6 +865,7 @@ const AuthenticatedPopupApp: React.FC = () => {
             apiStatus={apiStatus}
             onTestConnection={handleTestConnection}
             onUpdateSettings={updateSettings}
+            onShowUpgrade={handleShowUpgrade}
           />
         )}
 
@@ -859,6 +900,16 @@ const AuthenticatedPopupApp: React.FC = () => {
 
       {showDataManager && (
         <DataManager onClose={() => setShowDataManager(false)} />
+      )}
+
+      {showUpgradeModal && (
+        <UpgradeModal
+          isOpen={showUpgradeModal}
+          onClose={handleCloseUpgrade}
+          currentCredits={creditInfo.available}
+          requiredCredits={creditInfo.required}
+          trigger="manual"
+        />
       )}
     </div>
   );
