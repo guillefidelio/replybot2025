@@ -3,6 +3,8 @@ import { AuthWrapper } from './components/Auth/AuthWrapper';
 import { AuthenticatedApp } from './components/AuthenticatedApp';
 import './App.css';
 
+import { NotificationProvider } from './contexts/NotificationContext'; // Adjust path
+
 function App() {
   const { user, loading } = useAuth();
 
@@ -20,15 +22,17 @@ function App() {
 
   // Conditional rendering based on authentication state
   return (
-    <div className="App">
-      {user ? (
-        // User is authenticated - show the main app
-        <AuthenticatedApp />
-      ) : (
-        // User is not authenticated - show login/signup forms
-        <AuthWrapper />
-      )}
-    </div>
+    <NotificationProvider>
+      <div className="App">
+        {user ? (
+          // User is authenticated - show the main app
+          <AuthenticatedApp />
+        ) : (
+          // User is not authenticated - show login/signup forms
+          <AuthWrapper />
+        )}
+      </div>
+    </NotificationProvider>
   );
 }
 

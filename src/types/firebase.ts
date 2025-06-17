@@ -13,6 +13,11 @@ export interface UserProfile extends UserPaymentProfile { // Extended here
   displayName?: string;
   createdAt: Date; // Keep existing fields
   lastLoginAt: Date; // Keep existing fields
+  roles?: { // Added roles field
+    admin?: boolean;
+    editor?: boolean;
+    // Add other roles as needed
+  };
   // UserPaymentProfile fields will be merged here
   // e.g. subscriptionId?: string;
   //      credits: number;
