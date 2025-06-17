@@ -1,6 +1,6 @@
 // src/components/CreditDisplay.test.tsx
-import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+// import React from 'react'; // Removed unused import
+// import { render, screen, waitFor } from '@testing-library/react'; // Removed unused imports
 import '@testing-library/jest-dom';
 // import { AuthContext } from '../../contexts/AuthContext'; // Mock this
 // import { CreditService } from '../../services/CreditService'; // Mock this

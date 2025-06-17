@@ -1,5 +1,5 @@
 // src/components/UpgradeModal.test.tsx
-import React from 'react';
+// import React from 'react'; // Removed unused import
 // import { render, screen, fireEvent } from '@testing-library/react';
 // import '@testing-library/jest-dom';
 // import UpgradeModal from './UpgradeModal';

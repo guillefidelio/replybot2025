@@ -1,30 +1,34 @@
 // src/components/UpgradeModal.tsx
 import React, { useEffect, useState, useContext } from 'react';
-import { AuthContext } from '../../contexts/AuthContext'; // Adjust path as needed
-import { UserProfile } from '../../types/firebase'; // Adjust path
-import { SubscriptionPlan, DEFAULT_FREE_PLAN } from '../../types/payment'; // Adjust path
-// import './UpgradeModal.css'; // We'll assume a CSS file for styles
+import { AuthContext } from '../contexts/AuthContext'; // Corrected path
+import type { UserProfile } from '../types/firebase'; // Corrected path, type-only
+import type { SubscriptionPlan } from '../types/payment'; // Corrected path, type-only
+// import { DEFAULT_FREE_PLAN } from '../types/payment'; // Removed unused DEFAULT_FREE_PLAN
+// import './UpgradeModal.css';
 
-// This is a global declaration for the Paddle object, assuming Paddle.js is loaded via a script tag.
-// If using Paddle via npm package, import it directly.
 declare global {
   interface Window {
     Paddle: any;
   }
 }
 
+// Define a minimal AuthContextType if not properly defined elsewhere for 'user'
+// This is illustrative. The actual AuthContext should provide this.
+interface MinimalAuthContextType {
+  user: { uid: string; email?: string | null; } | null;
+  // Add other properties like loading, signIn, signOut if they exist in your actual AuthContext
+}
+
 interface UpgradeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  // We might pass current user profile or just rely on AuthContext
 }
 
-// Define some example plans. In a real app, these would come from a config or backend.
 const examplePlans: SubscriptionPlan[] = [
   {
     id: 'premium_monthly',
     name: 'Premium Monthly',
-    price: 1000, // in cents
+    price: 1000,
     currency: 'USD',
     credits: 200,
     features: ['All AI Features', '200 Credits/Month', 'Priority Support']
@@ -32,35 +36,33 @@ const examplePlans: SubscriptionPlan[] = [
   {
     id: 'premium_yearly',
     name: 'Premium Yearly',
-    price: 10000, // in cents
+    price: 10000,
     currency: 'USD',
-    credits: 2500, // e.g., 2400 + 100 bonus
+    credits: 2500,
     features: ['All AI Features', '2500 Credits/Year', 'Priority Support', 'Save 16%']
   },
   {
     id: 'credit_pack_small',
     name: 'Credit Pack (50)',
-    price: 500, // in cents
+    price: 500,
     currency: 'USD',
     credits: 50,
     features: ['One-time purchase', '50 Credits']
   }
 ];
 
-// Replace with your actual Paddle Vendor ID
 const PADDLE_VENDOR_ID = parseInt(process.env.REACT_APP_PADDLE_VENDOR_ID || 'YOUR_PADDLE_VENDOR_ID_HERE', 10);
 const PADDLE_ENVIRONMENT = process.env.REACT_APP_PADDLE_ENVIRONMENT === 'sandbox' ? 'sandbox' : 'live';
 
 
 const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
-  const { user } = useContext(AuthContext);
+  const { user } = useContext(AuthContext as React.Context<MinimalAuthContextType>); // Typed context
   const [isPaddleLoading, setIsPaddleLoading] = useState(true);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [paddleError, setPaddleError] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null); // For passthrough data
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
 
   useEffect(() => {
-    // Load Paddle.js script if not already loaded
     if (window.Paddle) {
       setIsPaddleLoading(false);
       if (PADDLE_ENVIRONMENT === 'sandbox') {
@@ -88,31 +90,28 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
     };
     document.body.appendChild(script);
 
-    return () => {
-      // document.body.removeChild(script); // Might cause issues if modal is re-opened quickly
-    };
   }, []);
 
-  // Fetch user profile for passthrough data - simplified
   useEffect(() => {
       if (user) {
-          // In a real app, you might fetch the full UserProfile from Firestore
-          // For now, construct a minimal one for passthrough
           setUserProfile({
               uid: user.uid,
               email: user.email || '',
-              // ... other necessary fields for passthrough or display
-              credits: 0, // Dummy value
+              credits: 0,
               activeFeatures: [],
               createdAt: new Date(),
               lastLoginAt: new Date(),
-          });
+              // Ensure all fields from UserProfile are present or optional
+              // If UserPaymentProfile fields are mandatory, they need defaults here too
+          } as UserProfile); // Cast to UserProfile to satisfy type, ensure all mandatory fields are covered
+      } else {
+        setUserProfile(null); // Clear profile if user logs out
       }
   }, [user]);
 
 
   const handlePlanSelection = (plan: SubscriptionPlan) => {
-    if (!user || !userProfile) {
+    if (!user || !userProfile) { // userProfile check is technically redundant if user implies profile existence for purchase
       setPaddleError('You must be logged in to make a purchase.');
       return;
     }
@@ -121,30 +120,25 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
       return;
     }
     setPaddleError(null);
-    setSelectedPlanId(plan.id); // Store selected plan id for passthrough
+    setSelectedPlanId(plan.id);
 
-    // Paddle Product ID might be different from your internal plan.id
-    // For this example, let's assume they are mapped or configured elsewhere.
-    // E.g., getPaddleProductId(plan.id)
-    const paddleProductId = plan.id; // Placeholder: use internal ID as Paddle Product ID
+    const paddleProductId = plan.id;
 
     console.log(`Opening Paddle Checkout for plan: ${plan.name}, Paddle Product ID: ${paddleProductId}`);
 
     window.Paddle.Checkout.open({
       product: paddleProductId,
-      email: user.email,
-      // customer_id: userProfile.paddleCustomerId, // If you have it
+      email: user.email, // user.email should be non-null for a logged-in user making a purchase
       passthrough: JSON.stringify({
         firebase_uid: user.uid,
         internal_plan_id: plan.id,
       }),
-      successCallback: (data: any) => {
+      successCallback: (data: any) => { // Consider typing 'data' if Paddle SDK provides types
         console.log('Paddle Checkout Success (Client-side):', data);
-        // IMPORTANT: DO NOT GRANT ENTITLEMENTS HERE. Wait for webhook.
         alert('Purchase successful! Your plan will be updated shortly.');
-        onClose(); // Close the modal
+        onClose();
       },
-      eventCallback: (data: any) => { // More modern way to handle events
+      eventCallback: (data: any) => { // Consider typing 'data'
         console.log('Paddle Event:', data);
         if (data.event === 'Checkout.Complete') {
            console.log('Paddle Checkout.Complete (Client-side via eventCallback):', data.eventData);
@@ -152,7 +146,7 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
            onClose();
         } else if (data.event === 'Checkout.Close') {
             console.log('Paddle Checkout Closed by user.');
-            setSelectedPlanId(null); // Reset selection
+            setSelectedPlanId(null);
         } else if (data.event === 'Checkout.Error') {
             console.error('Paddle Checkout Error:', data.eventData.message);
             setPaddleError(`Payment error: ${data.eventData.message}. Please try again.`);
@@ -166,7 +160,6 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
     return null;
   }
 
-  // Basic styling for modal
   const modalStyle: React.CSSProperties = {
     position: 'fixed', top: '0', left: '0', width: '100%', height: '100%',
     backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex',
@@ -195,7 +188,7 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ isOpen, onClose }) => {
                 <p>Price: ${(plan.price / 100).toFixed(2)} {plan.currency}</p>
                 <p>Credits: {plan.credits}</p>
                 <ul>
-                  {plan.features.map((feature, index) => (
+                  {plan.features.map((feature: string, index: number) => ( // Added types for feature and index
                     <li key={index}>{feature}</li>
                   ))}
                 </ul>

@@ -3,38 +3,27 @@
 import {
   doc,
   getDoc,
-  setDoc,
-  updateDoc,
+  // setDoc, // Removed unused
+  // updateDoc, // Removed unused
   runTransaction,
   onSnapshot,
   collection,
-  addDoc,
+  // addDoc, // Removed unused
   serverTimestamp,
   Timestamp,
-  FieldValue,
+  // FieldValue, // Removed unused
 } from 'firebase/firestore';
-import { db } from '../firebase'; // Assuming db is your Firestore instance
+import { db } from '../firebase';
 import type { UserProfile } from '../types/firebase';
-import type { CreditTransaction, SubscriptionPlan } from '../types/payment';
+import type { CreditTransaction /*, SubscriptionPlan*/ } from '../types/payment'; // Removed SubscriptionPlan
 
-// Helper to convert Firestore Timestamps to Dates in nested objects
-function convertTimestampsToDates(data: any): any {
-  if (data && typeof data === 'object') {
-    for (const key in data) {
-      if (data[key] instanceof Timestamp) {
-        data[key] = data[key].toDate();
-      } else if (typeof data[key] === 'object') {
-        convertTimestampsToDates(data[key]); // Recurse for nested objects
-      }
-    }
-  }
-  return data;
-}
+// Removed unused function convertTimestampsToDates
+// function convertTimestampsToDates(data: any): any { ... }
 
 
 export class CreditService {
   private static instance: CreditService;
-  private userCreditListeners: Map<string, () => void> = new Map(); // To store unsubscribe functions
+  private userCreditListeners: Map<string, () => void> = new Map();
 
   private constructor() {
     // Private constructor for singleton
@@ -47,11 +36,6 @@ export class CreditService {
     return CreditService.instance;
   }
 
-  /**
-   * Retrieves the current credit balance for a user.
-   * @param userId The ID of the user.
-   * @returns A promise that resolves to the user's credit balance, or null if user not found.
-   */
   async getUserCredits(userId: string): Promise<number | null> {
     try {
       const userDocRef = doc(db, 'users', userId);
@@ -68,15 +52,6 @@ export class CreditService {
     }
   }
 
-  /**
-   * Consumes a specified amount of credits from a user's balance.
-   * Logs the transaction in the 'creditTransactions' subcollection.
-   * @param userId The ID of the user.
-   * @param amount The number of credits to consume (should be positive).
-   * @param description A description of why the credits are being consumed.
-   * @param relatedId Optional ID related to this consumption (e.g., AI request ID).
-   * @returns A promise that resolves when the transaction is complete.
-   */
   async consumeCredits(userId: string, amount: number, description: string, relatedId?: string): Promise<void> {
     if (amount <= 0) {
       throw new Error('Amount to consume must be positive.');
@@ -105,14 +80,11 @@ export class CreditService {
         const newTransaction: Omit<CreditTransaction, 'id' | 'timestamp'> = {
           userId,
           type: 'usage',
-          amount: -amount, // Store as negative for consumption
+          amount: -amount,
           description,
           relatedId,
         };
-        // Firestore will add 'id' and 'timestamp' (via serverTimestamp)
-        // We need to cast serverTimestamp() to Timestamp for the transaction log,
-        // but it will be FieldValue for the actual write.
-        transaction.set(doc(transactionColRef), {
+        transaction.set(doc(transactionColRef), { // doc() here creates a new doc ref in the subcollection
           ...newTransaction,
           timestamp: serverTimestamp() as unknown as Timestamp
         });
@@ -124,16 +96,6 @@ export class CreditService {
     }
   }
 
-  /**
-   * Adds a specified amount of credits to a user's balance.
-   * Logs the transaction in the 'creditTransactions' subcollection.
-   * @param userId The ID of the user.
-   * @param amount The number of credits to add (should be positive).
-   * @param description A description of why the credits are being added.
-   * @param transactionType The type of credit addition.
-   * @param relatedId Optional ID related to this addition (e.g., purchase order ID).
-   * @returns A promise that resolves when the transaction is complete.
-   */
   async addCredits(
     userId: string,
     amount: number,
@@ -164,11 +126,11 @@ export class CreditService {
         const newTransaction: Omit<CreditTransaction, 'id' | 'timestamp'> = {
           userId,
           type: transactionType,
-          amount: amount, // Store as positive for addition
+          amount: amount,
           description,
           relatedId,
         };
-        transaction.set(doc(transactionColRef), {
+        transaction.set(doc(transactionColRef), { // doc() here creates a new doc ref in the subcollection
           ...newTransaction,
           timestamp: serverTimestamp() as unknown as Timestamp
         });
@@ -180,37 +142,23 @@ export class CreditService {
     }
   }
 
-  /**
-   * Checks if a user has access to a specific feature based on their active subscription.
-   * @param userId The ID of the user.
-   * @param featureId The ID of the feature to check.
-   * @returns A promise that resolves to true if the user has access, false otherwise.
-   */
   async hasFeatureAccess(userId: string, featureId: string): Promise<boolean> {
     try {
       const userDocRef = doc(db, 'users', userId);
       const userDocSnap = await getDoc(userDocRef);
       if (userDocSnap.exists()) {
         const userData = userDocSnap.data() as UserProfile;
-        // Ensure activeFeatures is an array, even if undefined in Firestore
         return userData.activeFeatures?.includes(featureId) ?? false;
       }
       console.warn(`User not found when checking feature access: ${userId}`);
       return false;
     } catch (error) {
       console.error(`Error checking feature access for ${userId}:`, error);
-      throw error; // Or return false depending on desired behavior
+      throw error;
     }
   }
 
-  /**
-   * Subscribes to real-time updates for a user's credit balance.
-   * @param userId The ID of the user.
-   * @param callback A function to call with the new credit balance whenever it changes.
-   * @returns An unsubscribe function to stop listening for updates.
-   */
   onCreditChange(userId: string, callback: (credits: number) => void): () => void {
-    // Remove any existing listener for this user to avoid duplicates
     this.userCreditListeners.get(userId)?.();
 
     const userDocRef = doc(db, 'users', userId);
@@ -219,39 +167,19 @@ export class CreditService {
         const userData = docSnap.data() as UserProfile;
         callback(userData.credits ?? 0);
       } else {
-        // Handle user document deletion or non-existence if necessary
-        callback(0); // Or throw an error, or call with null
+        callback(0);
       }
     }, (error) => {
       console.error(`Error listening to credit changes for ${userId}:`, error);
-      // Potentially call callback with a special error value or re-throw
     });
 
     this.userCreditListeners.set(userId, unsubscribe);
     return unsubscribe;
   }
 
-  /**
-   * Cleans up all active listeners when they are no longer needed.
-   * For example, when the service is being destroyed or user logs out.
-   */
   public cleanupListeners(): void {
     this.userCreditListeners.forEach(unsubscribe => unsubscribe());
     this.userCreditListeners.clear();
     console.log('Cleaned up all CreditService listeners.');
   }
-
-  // --- Placeholder for Caching ---
-  // TODO: Implement credit status caching for offline functionality
-  // This might involve:
-  // - Storing last known credit balance in localStorage/IndexedDB
-  // - Retrieving from cache if offline
-  // - Syncing with Firestore when back online
-
-  // async getCachedUserCredits(userId: string): Promise<number | null> {
-  //   // 1. Try to get from Firestore
-  //   // 2. If offline or error, try to get from local cache
-  //   // 3. Update cache whenever Firestore data is fetched
-  //   return this.getUserCredits(userId); // Placeholder
-  // }
 }

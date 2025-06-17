@@ -1,37 +1,39 @@
 // src/services/CreditService.test.ts
 
 import { CreditService } from './CreditService';
-import { db } from '../firebase'; // Actual db import
-import { UserProfile } from '../types/firebase';
-import { CreditTransaction, DEFAULT_FREE_PLAN } from '../types/payment';
+// import { db } from '../firebase'; // Removed unused db import
+import type { UserProfile } from '../types/firebase'; // Changed to type-only
+// Removed unused imports:
+// import type { CreditTransaction } from '../types/payment';
+// import { DEFAULT_FREE_PLAN } from '../types/payment';
+
 
 // Mock Firestore
 jest.mock('../firebase', () => ({
-  db: jest.fn(), // Mock the db export
+  db: jest.fn(),
 }));
 
-// In-depth mock of Firestore functions
 const mockGetDoc = jest.fn();
-const mockSetDoc = jest.fn(); // Though CreditService primarily uses updateDoc/runTransaction for existing docs
+const mockSetDoc = jest.fn();
 const mockUpdateDoc = jest.fn();
 const mockAddDoc = jest.fn();
 const mockRunTransaction = jest.fn();
 const mockOnSnapshot = jest.fn();
 const mockCollection = jest.fn();
 const mockDoc = jest.fn();
-const mockServerTimestamp = jest.fn(() => new Date()); // Return a consistent date for testing
+const mockServerTimestamp = jest.fn(() => new Date());
 
 jest.mock('firebase/firestore', () => ({
   getDoc: (docRef: any) => mockGetDoc(docRef),
   setDoc: (docRef: any, data: any) => mockSetDoc(docRef, data),
   updateDoc: (docRef: any, data: any) => mockUpdateDoc(docRef, data),
   addDoc: (collRef: any, data: any) => mockAddDoc(collRef, data),
-  runTransaction: (db: any, updateFunction: Function) => mockRunTransaction(db, updateFunction),
+  runTransaction: (db: any, updateFunction: Function) => mockRunTransaction(db, updateFunction), // db still received by mock, but test impl won't use its arg
   onSnapshot: (docRef: any, callback: Function, errorCallback?: Function) => mockOnSnapshot(docRef, callback, errorCallback),
   collection: (db: any, path: string, ...pathSegments: string[]) => mockCollection(db, path, ...pathSegments),
   doc: (db: any, path: string, ...pathSegments: string[]) => mockDoc(db, path, ...pathSegments),
   serverTimestamp: () => mockServerTimestamp(),
-  Timestamp: { fromDate: (date: Date) => date }, // Simple mock for Timestamp
+  Timestamp: { fromDate: (date: Date) => date },
 }));
 
 describe('CreditService', () => {
@@ -41,42 +43,28 @@ describe('CreditService', () => {
   const mockTransactionsColRef = { id: 'creditTransactions', path: `users/${testUserId}/creditTransactions` };
 
   beforeEach(() => {
-    // Reset all mocks before each test
     jest.clearAllMocks();
-
-    // Mock doc and collection to return our predefined refs for predictability
-    mockDoc.mockImplementation((dbOrCollRef, path, ...pathSegments) => {
-      // Case 1: doc(db, 'users', userId)
+    mockDoc.mockImplementation((dbOrCollRef, path, ...pathSegments) => { // Renamed first param for clarity
       if (typeof path === 'string' && path === 'users' && pathSegments[0] === testUserId) {
         return mockUserDocRef;
       }
-      // Case 2: doc(collectionRef) -> for creating a new transaction document
-      // Here, dbOrCollRef is the collectionRef, and 'path' argument from mock is undefined.
-      if (typeof dbOrCollRef === 'object' && dbOrCollRef.id === 'creditTransactions' && typeof path === 'undefined') {
-        return { id: 'newTransactionId', path: `users/${testUserId}/creditTransactions/newTransactionId` };
+      if (typeof dbOrCollRef === 'object' && dbOrCollRef.id === 'creditTransactions' && typeof path === 'undefined') { // Check for call with collectionRef
+         return { id: 'newTransactionId', path: `users/${testUserId}/creditTransactions/newTransactionId` };
       }
-      // Fallback for other unhandled doc calls
-      return { id: 'unknownPathInMockDoc', path: `unknownPathInMockDoc/${path}`};
+      return { id: 'unknownPathInMockDoc', path: `unknownPathInMockDoc/${path}`}; // Adjusted fallback
     });
 
-    // mockCollection
     mockCollection.mockImplementation((parentRefOrDb, pathSegment1, ...furtherPathSegments) => {
-      // For collection(userDocRef, 'creditTransactions') as used in CreditService
       if (typeof parentRefOrDb === 'object' &&
-          parentRefOrDb.id === testUserId && // parentRefOrDb is mockUserDocRef
+          parentRefOrDb.id === testUserId &&
           pathSegment1 === 'creditTransactions' &&
           furtherPathSegments.length === 0) {
         return mockTransactionsColRef;
       }
-      // Fallback for other unhandled collection calls
       return { id: 'unknownCollection', path: `unknownColl/${pathSegment1}` };
     });
-
-
     creditService = CreditService.getInstance();
-    // Ensure singleton instance is fresh for tests if needed, or manage its state.
-    // For simplicity, we rely on getInstance() providing the same, cleanable instance.
-    creditService.cleanupListeners(); // Clean up listeners from previous tests
+    creditService.cleanupListeners();
   });
 
   describe('getUserCredits', () => {
@@ -91,7 +79,7 @@ describe('CreditService', () => {
     });
 
     it('should return 0 if user exists but has no credits field', async () => {
-      const mockUserData: Partial<UserProfile> = { uid: testUserId, email: 'test@example.com' }; // No credits field
+      const mockUserData: Partial<UserProfile> = { uid: testUserId, email: 'test@example.com' };
       mockGetDoc.mockResolvedValue({ exists: () => true, data: () => mockUserData });
       const credits = await creditService.getUserCredits(testUserId);
       expect(credits).toBe(0);
@@ -112,7 +100,6 @@ describe('CreditService', () => {
   describe('consumeCredits', () => {
     const consumeAmount = 10;
     const initialCredits = 50;
-    // Define mockTransaction spies here to be accessible in the test assertions
     let mockTransactionGet: jest.Mock;
     let mockTransactionUpdate: jest.Mock;
     let mockTransactionSet: jest.Mock;
@@ -122,9 +109,8 @@ describe('CreditService', () => {
       mockTransactionGet = jest.fn().mockResolvedValue({ exists: () => true, data: () => ({ credits: initialCredits, uid: testUserId, email: 'test@example.com' } as UserProfile) });
       mockTransactionUpdate = jest.fn();
       mockTransactionSet = jest.fn();
-
-      mockRunTransaction.mockImplementation(async (db, updateFunction) => {
-        // The updateFunction will be called with an object that uses the spies defined above
+      // Removed unused 'db' param from callback
+      mockRunTransaction.mockImplementation(async (_db, updateFunction) => {
         await updateFunction({
           get: mockTransactionGet,
           update: mockTransactionUpdate,
@@ -139,22 +125,22 @@ describe('CreditService', () => {
       expect(mockTransactionGet).toHaveBeenCalledWith(mockUserDocRef);
       expect(mockTransactionUpdate).toHaveBeenCalledWith(mockUserDocRef, { credits: initialCredits - consumeAmount });
       expect(mockTransactionSet).toHaveBeenCalledWith(
-        expect.objectContaining({ path: expect.stringContaining(`users/${testUserId}/creditTransactions/`) }), // doc(mockTransactionsColRef)
+        expect.objectContaining({ path: expect.stringContaining(`users/${testUserId}/creditTransactions/`) }),
         expect.objectContaining({
           userId: testUserId,
           type: 'usage',
           amount: -consumeAmount,
           description: 'Test consumption',
-          timestamp: expect.any(Date), // from serverTimestamp mock
+          timestamp: expect.any(Date),
         })
       );
     });
 
     it('should throw error for insufficient credits', async () => {
-      // For this test, we only need to mock the 'get' part of the transaction
-      mockRunTransaction.mockImplementation(async (db, updateFunction) => {
+      // Removed unused 'db' param
+      mockRunTransaction.mockImplementation(async (_db, updateFunction) => {
         await updateFunction({
-          get: jest.fn().mockResolvedValue({ exists: () => true, data: () => ({ credits: 5 } as UserProfile) }), // Not enough credits
+          get: jest.fn().mockResolvedValue({ exists: () => true, data: () => ({ credits: 5 } as UserProfile) }),
           update: jest.fn(),
           set: jest.fn(),
         });
@@ -164,15 +150,15 @@ describe('CreditService', () => {
     });
 
     it('should throw error if amount to consume is zero or negative', async () => {
-      // No transaction needed for this validation
       await expect(creditService.consumeCredits(testUserId, 0, 'Test')).rejects.toThrow('Amount to consume must be positive.');
       await expect(creditService.consumeCredits(testUserId, -5, 'Test')).rejects.toThrow('Amount to consume must be positive.');
     });
 
     it('should throw error if user document does not exist in transaction', async () => {
-        mockRunTransaction.mockImplementation(async (db, updateFunction) => {
+        // Removed unused 'db' param
+        mockRunTransaction.mockImplementation(async (_db, updateFunction) => {
             await updateFunction({
-                get: jest.fn().mockResolvedValue({ exists: () => false }), // User does not exist
+                get: jest.fn().mockResolvedValue({ exists: () => false }),
                 update: jest.fn(),
                 set: jest.fn(),
             });
@@ -184,7 +170,6 @@ describe('CreditService', () => {
   describe('addCredits', () => {
     const addAmount = 20;
     const initialCredits = 30;
-    // Define mockTransaction spies here to be accessible in the test assertions
     let mockTransactionGet: jest.Mock;
     let mockTransactionUpdate: jest.Mock;
     let mockTransactionSet: jest.Mock;
@@ -193,8 +178,8 @@ describe('CreditService', () => {
       mockTransactionGet = jest.fn().mockResolvedValue({ exists: () => true, data: () => ({ credits: initialCredits, uid: testUserId, email: 'test@example.com' } as UserProfile) });
       mockTransactionUpdate = jest.fn();
       mockTransactionSet = jest.fn();
-
-      mockRunTransaction.mockImplementation(async (db, updateFunction) => {
+      // Removed unused 'db' param
+      mockRunTransaction.mockImplementation(async (_db, updateFunction) => {
         await updateFunction({
           get: mockTransactionGet,
           update: mockTransactionUpdate,
@@ -220,7 +205,6 @@ describe('CreditService', () => {
     });
 
     it('should throw error if amount to add is zero or negative', async () => {
-      // No transaction needed
       await expect(creditService.addCredits(testUserId, 0, 'Test')).rejects.toThrow('Amount to add must be positive.');
       await expect(creditService.addCredits(testUserId, -5, 'Test')).rejects.toThrow('Amount to add must be positive.');
     });
@@ -246,7 +230,7 @@ describe('CreditService', () => {
     });
 
     it('should return false if user has no activeFeatures array', async () => {
-      const mockUserData: Partial<UserProfile> = { uid: testUserId, email: 'test@example.com' }; // No activeFeatures
+      const mockUserData: Partial<UserProfile> = { uid: testUserId, email: 'test@example.com' };
       mockGetDoc.mockResolvedValue({ exists: () => true, data: () => mockUserData });
       const access = await creditService.hasFeatureAccess(testUserId, 'featureA');
       expect(access).toBe(false);
@@ -268,10 +252,11 @@ describe('CreditService', () => {
         onSnapshotCallback = null;
         onSnapshotErrorCallback = null;
         mockUnsubscribe = jest.fn();
-        mockOnSnapshot.mockImplementation((docRef, cb, errCb) => {
+        // Removed unused 'docRef' param
+        mockOnSnapshot.mockImplementation((_docRef, cb, errCb) => {
             onSnapshotCallback = cb;
             onSnapshotErrorCallback = errCb;
-            return mockUnsubscribe; // Return the mock unsubscribe function
+            return mockUnsubscribe;
         });
     });
 
@@ -281,13 +266,11 @@ describe('CreditService', () => {
 
       expect(mockOnSnapshot).toHaveBeenCalledWith(mockUserDocRef, expect.any(Function), expect.any(Function));
 
-      // Simulate a Firestore update
       if (onSnapshotCallback) {
         onSnapshotCallback({ exists: () => true, data: () => ({ credits: 150 } as UserProfile) });
       }
       expect(callback).toHaveBeenCalledWith(150);
 
-      // Simulate another update
       if (onSnapshotCallback) {
         onSnapshotCallback({ exists: () => true, data: () => ({ credits: 120 } as UserProfile) });
       }
@@ -299,7 +282,7 @@ describe('CreditService', () => {
         const callback = jest.fn();
         creditService.onCreditChange(testUserId, callback);
         if (onSnapshotCallback) {
-            onSnapshotCallback({ exists: () => false }); // Simulate user doc not existing
+            onSnapshotCallback({ exists: () => false });
         }
         expect(callback).toHaveBeenCalledWith(0);
     });
@@ -319,28 +302,27 @@ describe('CreditService', () => {
 
     it('should unsubscribe when returned function is called', () => {
       const unsubscribe = creditService.onCreditChange(testUserId, jest.fn());
-      unsubscribe(); // Call the unsubscribe function
+      unsubscribe();
       expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
     });
 
     it('should allow multiple listeners and cleanupAll should unsubscribe all', () => {
         const callback1 = jest.fn();
         const callback2 = jest.fn();
-        const unsubscribe1 = creditService.onCreditChange('user1', callback1);
-        const unsubscribe2 = creditService.onCreditChange('user2', callback2);
+        // Removed unused unsubscribe1, unsubscribe2 variables
+        creditService.onCreditChange('user1', callback1);
+        creditService.onCreditChange('user2', callback2);
 
-        // Simulate snapshot calls for user1
         const user1SnapshotCb = mockOnSnapshot.mock.calls[mockOnSnapshot.mock.calls.length - 2][1];
         user1SnapshotCb({ exists: () => true, data: () => ({ credits: 10 }) });
         expect(callback1).toHaveBeenCalledWith(10);
 
-        // Simulate snapshot calls for user2
         const user2SnapshotCb = mockOnSnapshot.mock.calls[mockOnSnapshot.mock.calls.length - 1][1];
         user2SnapshotCb({ exists: () => true, data: () => ({ credits: 20 }) });
         expect(callback2).toHaveBeenCalledWith(20);
 
         creditService.cleanupListeners();
-        expect(mockUnsubscribe).toHaveBeenCalledTimes(2); // Assuming mockUnsubscribe is correctly linked for each listener
+        expect(mockUnsubscribe).toHaveBeenCalledTimes(2);
     });
   });
 });

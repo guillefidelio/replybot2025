@@ -1,6 +1,8 @@
 // src/contexts/NotificationContext.tsx
-import React, { createContext, useState, useCallback, ReactNode, useContext } from 'react';
-import ToastContainer, { ToastNotification } from '../components/ToastContainer'; // Adjust path
+import React, { createContext, useState, useCallback, useContext } from 'react';
+import type { ReactNode } from 'react'; // Changed to type-only import
+import ToastContainer from '../components/ToastContainer'; // Adjust path
+import type { ToastNotification } from '../components/ToastContainer'; // Changed to type-only import and ensure path is correct for the type if it's from the component itself.
 
 type NotificationContextType = {
   addNotification: (message: string, type: ToastNotification['type'], duration?: number) => void;

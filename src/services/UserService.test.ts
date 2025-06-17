@@ -1,10 +1,12 @@
 // src/services/UserService.test.ts
 
-import { UserService, FirestoreUserProfile } from './UserService';
-import { db } from '../firebase'; // Actual db import
-import { UserProfile } from '../types/firebase';
-import { DEFAULT_FREE_PLAN, SubscriptionPlan } from '../types/payment';
-import type { User } from 'firebase/auth'; // Import User type
+import { UserService } from './UserService';
+import type { FirestoreUserProfile } from './UserService'; // Changed to type-only
+// import { db } from '../firebase'; // Removed unused db import
+import type { UserProfile } from '../types/firebase'; // Changed to type-only
+import { DEFAULT_FREE_PLAN } from '../types/payment';
+// import type { SubscriptionPlan } from '../types/payment'; // SubscriptionPlan import removed as it's unused
+import type { User } from 'firebase/auth';
 
 // Mock Firestore
 jest.mock('../firebase', () => ({
@@ -15,9 +17,8 @@ const mockGetDoc = jest.fn();
 const mockSetDoc = jest.fn();
 const mockUpdateDoc = jest.fn();
 const mockDoc = jest.fn();
-const mockServerTimestamp = jest.fn(() => new Date('2023-01-01T12:00:00.000Z')); // Consistent mock date
+const mockServerTimestamp = jest.fn(() => new Date('2023-01-01T12:00:00.000Z'));
 
-// Mock 'firebase/firestore' module
 jest.mock('firebase/firestore', () => ({
   getDoc: (docRef: any) => mockGetDoc(docRef),
   setDoc: (docRef: any, data: any) => mockSetDoc(docRef, data),
@@ -25,8 +26,8 @@ jest.mock('firebase/firestore', () => ({
   doc: (db: any, path: string, ...pathSegments: string[]) => mockDoc(db, path, ...pathSegments),
   serverTimestamp: () => mockServerTimestamp(),
   Timestamp: {
-    fromDate: (date: Date) => ({ toDate: () => date, _seconds: date.getTime() / 1000, _nanoseconds: 0 }), // Mock Timestamp.fromDate
-    now: () => ({ toDate: () => new Date(), _seconds: Date.now() / 1000, _nanoseconds: 0 }) // Mock Timestamp.now if needed by serverTimestamp indirectly
+    fromDate: (date: Date) => ({ toDate: () => date, _seconds: date.getTime() / 1000, _nanoseconds: 0 }),
+    now: () => ({ toDate: () => new Date(), _seconds: Date.now() / 1000, _nanoseconds: 0 })
   },
 }));
 
@@ -39,12 +40,12 @@ describe('UserService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockDoc.mockReturnValue(mockUserDocRef); // Default mock for doc()
+    mockDoc.mockReturnValue(mockUserDocRef);
   });
 
   describe('createUserDocument', () => {
     it('should create a new user document with default free plan settings if it does not exist', async () => {
-      mockGetDoc.mockResolvedValue({ exists: () => false }); // User does not exist
+      mockGetDoc.mockResolvedValue({ exists: () => false });
 
       await UserService.createUserDocument(mockUser);
 
@@ -67,10 +68,10 @@ describe('UserService', () => {
     });
 
     it('should not create a document if one already exists', async () => {
-      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ email: testUserEmail }) }); // User exists
+      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ email: testUserEmail }) });
       await UserService.createUserDocument(mockUser);
       expect(mockSetDoc).not.toHaveBeenCalled();
-      expect(mockUpdateDoc).not.toHaveBeenCalled(); // Should not update either in this specific method
+      expect(mockUpdateDoc).not.toHaveBeenCalled();
     });
 
     it('should throw an error if Firestore operation fails', async () => {
@@ -82,14 +83,13 @@ describe('UserService', () => {
   describe('getUserProfile', () => {
     it('should return user profile with converted dates if user exists', async () => {
       const serverDate = new Date('2023-10-26T00:00:00.000Z');
-      const mockFirestoreData: FirestoreUserProfile = { // Type from UserService
+      const mockFirestoreData: FirestoreUserProfile = {
         uid: testUserId,
         email: testUserEmail,
         credits: 100,
         activeFeatures: ['test_feature'],
         subscriptionId: 'premium',
         subscriptionStatus: 'active',
-        // Ensure these are mock Timestamps with a toDate method
         createdAt: { toDate: () => new Date('2023-01-01T12:00:00.000Z'), _seconds: new Date('2023-01-01T12:00:00.000Z').getTime()/1000, _nanoseconds:0 } as any,
         lastLoginAt: { toDate: () => new Date('2023-01-01T12:00:00.000Z'), _seconds: new Date('2023-01-01T12:00:00.000Z').getTime()/1000, _nanoseconds:0 } as any,
         updatedAt: { toDate: () => new Date('2023-01-01T12:00:00.000Z'), _seconds: new Date('2023-01-01T12:00:00.000Z').getTime()/1000, _nanoseconds:0 } as any,
@@ -106,9 +106,9 @@ describe('UserService', () => {
         credits: 100,
         activeFeatures: ['test_feature'],
         subscriptionId: 'premium',
-        createdAt: new Date('2023-01-01T12:00:00.000Z'), // Dates after conversion
+        createdAt: new Date('2023-01-01T12:00:00.000Z'),
         lastLoginAt: new Date('2023-01-01T12:00:00.000Z'),
-        nextBillingDate: serverDate, // This was already correct
+        nextBillingDate: serverDate,
       }));
     });
 
@@ -138,9 +138,8 @@ describe('UserService', () => {
         nextBillingDate: new Date('2023-11-01T00:00:00.000Z'),
       };
 
-      // Expected data for updateDoc, with Date converted to mock Timestamp
       const expectedNextBillingDateTimestamp = {
-        toDate: expect.any(Function), // The function instance will differ
+        toDate: expect.any(Function),
         _seconds: newSubscriptionData.nextBillingDate!.getTime()/1000,
         _nanoseconds: 0
       };
@@ -150,7 +149,7 @@ describe('UserService', () => {
         activeFeatures: ['premium_feature_1'],
         paddleCustomerId: 'paddle123',
         nextBillingDate: expect.objectContaining(expectedNextBillingDateTimestamp),
-        updatedAt: mockServerTimestamp(), // This is a Date object from our mock
+        updatedAt: mockServerTimestamp(),
       };
 
       await UserService.updateUserSubscription(testUserId, newSubscriptionData);
@@ -181,10 +180,9 @@ describe('UserService', () => {
 
   describe('ensureUserDocument', () => {
     it('should call createUserDocument if user does not exist', async () => {
-      mockGetDoc.mockResolvedValue({ exists: () => false }); // User does not exist
-      // Spy on createUserDocument because it's a static method of the same class
+      mockGetDoc.mockResolvedValue({ exists: () => false });
       const createUserDocumentSpy = jest.spyOn(UserService, 'createUserDocument');
-      createUserDocumentSpy.mockResolvedValueOnce(undefined); // Mock its implementation
+      createUserDocumentSpy.mockResolvedValueOnce(undefined);
 
       await UserService.ensureUserDocument(mockUser);
 
@@ -193,7 +191,7 @@ describe('UserService', () => {
     });
 
     it('should call updateLastLogin if user exists and has credits field', async () => {
-      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ credits: 10 }) }); // User exists and has credits
+      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ credits: 10 }) });
       const updateLastLoginSpy = jest.spyOn(UserService, 'updateLastLogin');
       updateLastLoginSpy.mockResolvedValueOnce(undefined);
 
@@ -205,12 +203,12 @@ describe('UserService', () => {
     });
 
     it('should add default payment fields if user exists but lacks them', async () => {
-      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ email: testUserEmail }) }); // User exists but no 'credits' field
+      mockGetDoc.mockResolvedValue({ exists: () => true, data: () => ({ email: testUserEmail }) });
       const updateLastLoginSpy = jest.spyOn(UserService, 'updateLastLogin').mockResolvedValueOnce(undefined);
 
       await UserService.ensureUserDocument(mockUser);
 
-      expect(updateLastLoginSpy).toHaveBeenCalledWith(mockUser); // Still updates last login
+      expect(updateLastLoginSpy).toHaveBeenCalledWith(mockUser);
       expect(mockUpdateDoc).toHaveBeenCalledWith(
         mockUserDocRef,
         expect.objectContaining({
