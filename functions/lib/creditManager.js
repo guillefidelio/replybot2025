@@ -118,6 +118,7 @@ exports.consumeCredit = functions.https.onCall(async (data, context) => {
         await (0, audit_1.auditLog)({
             userId,
             action: 'credit_consumed',
+            level: audit_1.LogLevel.INFO,
             details: {
                 amount,
                 operation,
@@ -167,13 +168,8 @@ exports.getCreditStatus = functions.https.onCall(async (data, context) => {
             plan: subscription.plan || 'free',
             resetDate: ((_a = credits.resetDate) === null || _a === void 0 ? void 0 : _a.toDate()) || new Date()
         };
-        // Log access
-        await (0, audit_1.auditLog)({
-            userId,
-            action: 'credit_status_checked',
-            details: creditStatus,
-            timestamp: new Date()
-        });
+        // REMOVE NOISE: Don't log routine credit status checks
+        // This was generating excessive audit logs for every status check
         return creditStatus;
     }
     catch (error) {
@@ -202,7 +198,7 @@ exports.getCreditStatusHttp = functions.https.onRequest(async (req, res) => {
             res.status(405).json({ error: 'Method not allowed' });
             return;
         }
-        const { userId, userEmail, operation } = req.body;
+        const { userId, userEmail } = req.body;
         if (!userId || !userEmail) {
             res.status(400).json({ error: 'Missing userId or userEmail' });
             return;
@@ -228,13 +224,8 @@ exports.getCreditStatusHttp = functions.https.onRequest(async (req, res) => {
             plan: subscription.plan || 'free',
             resetDate: ((_a = credits.resetDate) === null || _a === void 0 ? void 0 : _a.toDate()) || new Date()
         };
-        // Log access
-        await (0, audit_1.auditLog)({
-            userId,
-            action: 'credit_status_checked',
-            details: { operation, creditStatus },
-            timestamp: new Date()
-        });
+        // REMOVE NOISE: Don't log routine credit status checks
+        // This was generating excessive audit logs for every status check
         res.status(200).json(creditStatus);
     }
     catch (error) {
@@ -243,10 +234,10 @@ exports.getCreditStatusHttp = functions.https.onRequest(async (req, res) => {
     }
 });
 /**
- * HTTP version of consumeCredit with AI generation for extension compatibility
+ * Secure AI Response Flow - Single gatekeeper for credit consumption and AI generation
+ * Implements atomic transactions to prevent exploits and provides consolidated response
  */
 exports.consumeCreditHttp = functions.https.onRequest(async (req, res) => {
-    var _a, _b, _c;
     try {
         // Enable CORS
         res.set('Access-Control-Allow-Origin', '*');
@@ -265,8 +256,10 @@ exports.consumeCreditHttp = functions.https.onRequest(async (req, res) => {
             res.status(400).json({ error: 'Missing required fields' });
             return;
         }
-        // Use atomic transaction to consume credits and prepare response
+        // MANDATORY: Atomic transaction wrapper for security
         const result = await db.runTransaction(async (transaction) => {
+            var _a, _b, _c, _d, _e, _f;
+            // READ: Get the user document
             const userRef = db.collection('users').doc(userId);
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) {
@@ -275,19 +268,39 @@ exports.consumeCreditHttp = functions.https.onRequest(async (req, res) => {
             const userData = userDoc.data();
             const credits = userData.credits || {};
             const currentCredits = credits.available || 0;
-            // Check if user has enough credits
-            if (currentCredits < 1) {
+            // CHECK: Validate credits before proceeding
+            if (currentCredits <= 0) {
                 return {
                     success: false,
-                    error: 'Insufficient credits',
-                    creditInfo: {
-                        available: currentCredits,
-                        required: 1,
-                        hasCredits: false
-                    }
+                    error: 'INSUFFICIENT_CREDITS'
                 };
             }
-            // Consume 1 credit
+            // EXECUTE: Call OpenAI API (inside transaction to ensure atomicity)
+            let aiResponse;
+            try {
+                const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${functions.config().openai.api_key}`
+                    },
+                    body: JSON.stringify(aiRequest)
+                });
+                if (!openaiResponse.ok) {
+                    throw new Error(`OpenAI API error: ${openaiResponse.status}`);
+                }
+                const openaiData = await openaiResponse.json();
+                aiResponse = (_c = (_b = (_a = openaiData.choices) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.message) === null || _c === void 0 ? void 0 : _c.content;
+                if (!aiResponse) {
+                    throw new Error('No response text from OpenAI');
+                }
+            }
+            catch (openaiError) {
+                console.error('OpenAI API failed inside transaction:', openaiError);
+                // If OpenAI fails, the transaction fails - no credit consumed
+                throw new Error(`AI generation failed: ${openaiError}`);
+            }
+            // WRITE: Only update credits after successful OpenAI response
             const newCredits = currentCredits - 1;
             const newUsed = (credits.used || 0) + 1;
             transaction.update(userRef, {
@@ -306,7 +319,8 @@ exports.consumeCreditHttp = functions.https.onRequest(async (req, res) => {
                 operation: operation || 'individual_response',
                 metadata: {
                     reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
-                    responseType: 'ai_generated'
+                    responseType: 'ai_generated',
+                    prompt: ((_f = (_e = (_d = aiRequest.messages) === null || _d === void 0 ? void 0 : _d[0]) === null || _e === void 0 ? void 0 : _e.content) === null || _f === void 0 ? void 0 : _f.substring(0, 100)) + '...' // Truncated for logging
                 },
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 balanceAfter: newCredits,
@@ -314,87 +328,49 @@ exports.consumeCreditHttp = functions.https.onRequest(async (req, res) => {
             });
             return {
                 success: true,
-                remainingCredits: newCredits,
-                transactionId,
-                creditInfo: {
-                    available: newCredits,
-                    used: newUsed,
-                    total: credits.total || 10,
-                    hasCredits: newCredits > 0
-                }
+                aiResponse,
+                newCreditBalance: newCredits
             };
         });
+        // Handle transaction results
         if (!result.success) {
+            console.log(`[Credit Check Failed] User ${userId}: ${result.error}`);
             res.status(400).json(result);
             return;
         }
-        // Now make the OpenAI API call
-        try {
-            const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${functions.config().openai.api_key}`
-                },
-                body: JSON.stringify(aiRequest)
-            });
-            if (!openaiResponse.ok) {
-                throw new Error(`OpenAI API error: ${openaiResponse.status}`);
-            }
-            const openaiData = await openaiResponse.json();
-            const responseText = (_c = (_b = (_a = openaiData.choices) === null || _a === void 0 ? void 0 : _a[0]) === null || _b === void 0 ? void 0 : _b.message) === null || _c === void 0 ? void 0 : _c.content;
-            if (!responseText) {
-                throw new Error('No response text from OpenAI');
-            }
-            // Log successful operation
-            await (0, audit_1.auditLog)({
-                userId,
-                action: 'ai_response_generated',
-                details: {
-                    operation,
-                    reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
-                    success: true,
-                    creditsConsumed: 1,
-                    remainingCredits: result.remainingCredits
-                },
-                timestamp: new Date()
-            });
-            res.status(200).json({
+        // Log successful operation
+        await (0, audit_1.auditLog)({
+            userId,
+            action: 'ai_response_generated',
+            level: audit_1.LogLevel.INFO,
+            details: {
+                operation,
+                reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
                 success: true,
-                data: {
-                    responseText,
-                    creditInfo: result.creditInfo,
-                    transactionId: result.transactionId
-                }
-            });
-        }
-        catch (openaiError) {
-            console.error('OpenAI API error:', openaiError);
-            // Since we already consumed the credit, we should log this as a failed generation
-            await (0, audit_1.auditLog)({
-                userId,
-                action: 'ai_response_failed',
-                details: {
-                    operation,
-                    reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
-                    error: openaiError instanceof Error ? openaiError.message : 'Unknown error',
-                    creditsConsumed: 1,
-                    remainingCredits: result.remainingCredits
-                },
-                timestamp: new Date()
-            });
-            res.status(500).json({
-                success: false,
-                error: 'Failed to generate AI response',
-                creditInfo: result.creditInfo
-            });
-        }
+                creditsConsumed: 1,
+                remainingCredits: result.newCreditBalance
+            },
+            timestamp: new Date()
+        });
+        // Return consolidated response payload
+        res.status(200).json(result);
     }
     catch (error) {
         console.error('Error in consumeCreditHttp:', error);
+        // Log failed operation
+        await (0, audit_1.auditLog)({
+            userId: req.body.userId || 'unknown',
+            action: 'ai_response_failed',
+            level: audit_1.LogLevel.CRITICAL,
+            details: {
+                operation: req.body.operation || 'unknown',
+                error: error instanceof Error ? error.message : 'Unknown error'
+            },
+            timestamp: new Date()
+        });
         res.status(500).json({
             success: false,
-            error: 'Internal server error'
+            error: 'INTERNAL_ERROR'
         });
     }
 });
@@ -462,6 +438,7 @@ exports.adjustCredits = functions.https.onCall(async (data, context) => {
         await (0, audit_1.auditLog)({
             userId: adminUserId,
             action: 'credit_adjusted',
+            level: audit_1.LogLevel.CRITICAL,
             details: {
                 targetUserId: userId,
                 amount,

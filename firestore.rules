@@ -196,6 +196,21 @@ service cloud.firestore {
         allow delete: if isAdmin();
       }
       
+      // AI generation jobs subcollection
+      match /generationJobs/{jobId} {
+        // Allow read access to own generation jobs
+        allow read: if isOwner(userId);
+        
+        // Allow admins and support to read any generation jobs
+        allow read: if isAdmin() || isSupport();
+        
+        // Allow system services to create and update generation jobs
+        allow create, update: if isSystemService() || isAdmin();
+        
+        // Allow admins to delete generation jobs if needed
+        allow delete: if isAdmin();
+      }
+      
       // Existing prompts subcollection (maintain existing functionality)
       match /prompts/{promptId} {
         // Allow read/write access to own prompts

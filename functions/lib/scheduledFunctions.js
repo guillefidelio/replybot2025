@@ -110,6 +110,7 @@ exports.monthlyReset = functions.pubsub.schedule('0 0 1 * *').timeZone('UTC').on
         await (0, audit_1.auditLog)({
             userId: 'system',
             action: 'monthly_credit_reset',
+            level: audit_1.LogLevel.CRITICAL,
             details: {
                 processedUsers,
                 errorCount,
@@ -445,6 +446,7 @@ exports.triggerMonthlyReset = functions.https.onCall(async (data, context) => {
         await (0, audit_1.auditLog)({
             userId,
             action: 'admin_manual_reset',
+            level: audit_1.LogLevel.CRITICAL,
             details: {
                 targetUserId,
                 reason,

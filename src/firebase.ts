@@ -1,6 +1,7 @@
 // Firebase configuration and initialization
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+// Import initializeAuth and indexedDBLocalPersistence for service worker compatibility
+import { initializeAuth, indexedDBLocalPersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 // Your Firebase configuration
@@ -18,8 +19,10 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firebase Authentication and get a reference to the service
-export const auth = getAuth(app);
+// Initialize Firebase Authentication with service worker-safe persistence
+export const auth = initializeAuth(app, {
+    persistence: indexedDBLocalPersistence
+});
 
 // Initialize Cloud Firestore and get a reference to the service
 export const db = getFirestore(app);

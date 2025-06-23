@@ -159,8 +159,27 @@ export function AuthProvider({ children }: AuthProviderProps) {
           });
           console.log('User auth state stored in Chrome storage');
           
-          await PromptSyncService.syncOnLogin(user);
-          console.log('Prompts synced successfully on login');
+          // HANDSHAKE: Perform single data fetch on authentication
+          try {
+            console.log('Initiating handshake for user session data...');
+            
+            // Notify background script to perform handshake
+            chrome.runtime.sendMessage({
+              type: 'PERFORM_HANDSHAKE',
+              data: {
+                uid: user.uid,
+                email: user.email,
+                displayName: user.displayName
+              }
+            });
+            
+            console.log('Handshake initiated successfully');
+          } catch (handshakeError) {
+            console.error('Failed to initiate handshake:', handshakeError);
+            // Fallback to legacy prompt sync
+            await PromptSyncService.syncOnLogin(user);
+            console.log('Fell back to legacy prompt sync');
+          }
         } catch (error) {
           console.error('Failed to handle user login:', error);
           // Continue with authentication even if user document creation, migration, or prompt sync fails

@@ -1,6 +1,6 @@
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
-import { auditLog, logSecurityEvent } from './audit';
+import { auditLog, LogLevel, logSecurityEvent } from './audit';
 
 const db = admin.firestore();
 
@@ -91,6 +91,7 @@ export const monthlyReset = functions.pubsub.schedule('0 0 1 * *').timeZone('UTC
     await auditLog({
       userId: 'system',
       action: 'monthly_credit_reset',
+      level: LogLevel.CRITICAL,
       details: {
         processedUsers,
         errorCount,
@@ -481,6 +482,7 @@ export const triggerMonthlyReset = functions.https.onCall(async (data, context) 
     await auditLog({
       userId,
       action: 'admin_manual_reset',
+      level: LogLevel.CRITICAL,
       details: {
         targetUserId,
         reason,

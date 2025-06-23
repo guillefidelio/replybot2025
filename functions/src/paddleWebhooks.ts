@@ -1,7 +1,7 @@
 // import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
 // import * as crypto from 'crypto';
-import { auditLog } from './audit';
+import { auditLog, LogLevel } from './audit';
 
 // const db = admin.firestore();
 
@@ -40,6 +40,7 @@ export const paddleWebhook = functions.https.onRequest(async (req, res) => {
     await auditLog({
       userId: 'system',
       action: 'paddle_webhook_received',
+      level: LogLevel.CRITICAL,
       details: {
         event: webhookData.event_type || 'unknown',
         data: webhookData

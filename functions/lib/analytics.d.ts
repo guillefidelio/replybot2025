@@ -11,9 +11,15 @@ export interface AnalyticsEvent {
 /**
  * Log analytics event
  */
-export declare function logAnalytics(event: AnalyticsEvent): Promise<void>;
+export declare const logAnalytics: functions.HttpsFunction & functions.Runnable<any>;
 /**
  * Get user analytics
  */
 export declare const getUserAnalytics: functions.HttpsFunction & functions.Runnable<any>;
+/**
+ * Part 4: Strategic Analytics Engine
+ * Daily Analytics Aggregator Function
+ * Runs once every 24 hours to aggregate key business metrics
+ */
+export declare const dailyAnalyticsAggregator: functions.CloudFunction<unknown>;
 //# sourceMappingURL=analytics.d.ts.map

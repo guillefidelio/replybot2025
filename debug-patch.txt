@@ -1,0 +1,18 @@
+﻿// DEBUG PATCH - Add this to the TOP of your background.ts file after the imports
+console.log(' [DEBUG] Background script loaded at:', new Date().toLocaleTimeString());
+
+// Override the log function to be more visible
+const originalLog = console.log;
+const log = (message: string, data?: any) => {
+  const timestamp = new Date().toLocaleTimeString();
+  originalLog(` [${timestamp}] ${message}`, data || '');
+};
+
+// Add global error handler
+window.addEventListener('error', (event) => {
+  console.error(' [GLOBAL ERROR]:', event.error);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error(' [UNHANDLED PROMISE REJECTION]:', event.reason);
+});

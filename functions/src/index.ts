@@ -9,7 +9,22 @@ export { consumeCredit, getCreditStatus, getCreditStatusHttp, consumeCreditHttp,
 export { monthlyReset } from './scheduledFunctions';
 export { paddleWebhook } from './paddleWebhooks';
 export { rateLimitMiddleware } from './rateLimiter';
-export { logAnalytics, getUserAnalytics } from './analytics';
+export { logAnalytics, getUserAnalytics, dailyAnalyticsAggregator } from './analytics';
+
+// Export audit functions
+export { 
+  getUserAuditLogs, 
+  getSecurityLogs, 
+  cleanupAuditLogs, 
+  exportAuditLogs, 
+  auditLogSink 
+} from './audit';
+
+// Export the new handshake function
+export { getUserSessionData } from './handshake';
+
+// Export the new asynchronous AI generation functions
+export { requestAIGeneration, processAIGeneration } from './aiGeneration';
 
 // Health check function
 export const healthCheck = functions.https.onRequest((req, res) => {

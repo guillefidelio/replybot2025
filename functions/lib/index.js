@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.healthCheck = exports.getUserAnalytics = exports.logAnalytics = exports.rateLimitMiddleware = exports.paddleWebhook = exports.monthlyReset = exports.adjustCredits = exports.consumeCreditHttp = exports.getCreditStatusHttp = exports.getCreditStatus = exports.consumeCredit = void 0;
+exports.healthCheck = exports.processAIGeneration = exports.requestAIGeneration = exports.getUserSessionData = exports.auditLogSink = exports.exportAuditLogs = exports.cleanupAuditLogs = exports.getSecurityLogs = exports.getUserAuditLogs = exports.dailyAnalyticsAggregator = exports.getUserAnalytics = exports.logAnalytics = exports.rateLimitMiddleware = exports.paddleWebhook = exports.monthlyReset = exports.adjustCredits = exports.consumeCreditHttp = exports.getCreditStatusHttp = exports.getCreditStatus = exports.consumeCredit = void 0;
 const admin = __importStar(require("firebase-admin"));
 const functions = __importStar(require("firebase-functions"));
 // Initialize Firebase Admin SDK
@@ -54,6 +54,21 @@ Object.defineProperty(exports, "rateLimitMiddleware", { enumerable: true, get: f
 var analytics_1 = require("./analytics");
 Object.defineProperty(exports, "logAnalytics", { enumerable: true, get: function () { return analytics_1.logAnalytics; } });
 Object.defineProperty(exports, "getUserAnalytics", { enumerable: true, get: function () { return analytics_1.getUserAnalytics; } });
+Object.defineProperty(exports, "dailyAnalyticsAggregator", { enumerable: true, get: function () { return analytics_1.dailyAnalyticsAggregator; } });
+// Export audit functions
+var audit_1 = require("./audit");
+Object.defineProperty(exports, "getUserAuditLogs", { enumerable: true, get: function () { return audit_1.getUserAuditLogs; } });
+Object.defineProperty(exports, "getSecurityLogs", { enumerable: true, get: function () { return audit_1.getSecurityLogs; } });
+Object.defineProperty(exports, "cleanupAuditLogs", { enumerable: true, get: function () { return audit_1.cleanupAuditLogs; } });
+Object.defineProperty(exports, "exportAuditLogs", { enumerable: true, get: function () { return audit_1.exportAuditLogs; } });
+Object.defineProperty(exports, "auditLogSink", { enumerable: true, get: function () { return audit_1.auditLogSink; } });
+// Export the new handshake function
+var handshake_1 = require("./handshake");
+Object.defineProperty(exports, "getUserSessionData", { enumerable: true, get: function () { return handshake_1.getUserSessionData; } });
+// Export the new asynchronous AI generation functions
+var aiGeneration_1 = require("./aiGeneration");
+Object.defineProperty(exports, "requestAIGeneration", { enumerable: true, get: function () { return aiGeneration_1.requestAIGeneration; } });
+Object.defineProperty(exports, "processAIGeneration", { enumerable: true, get: function () { return aiGeneration_1.processAIGeneration; } });
 // Health check function
 exports.healthCheck = functions.https.onRequest((req, res) => {
     res.status(200).json({

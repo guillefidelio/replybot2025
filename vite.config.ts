@@ -58,6 +58,9 @@ export default defineConfig({
           }
           return 'assets/[name]-[hash][extname]';
         },
+        // Disable module preloading for service worker compatibility
+        inlineDynamicImports: false,
+        manualChunks: undefined, // Prevent chunking for background script
       },
     },
     // Ensure compatibility with Chrome extension environment
@@ -65,6 +68,8 @@ export default defineConfig({
     minify: 'esbuild',
     // Copy manifest and icons to dist
     copyPublicDir: false,
+    // Disable module preloading for service worker compatibility
+    modulePreload: false,
   },
   // Configure for Chrome extension development
   define: {

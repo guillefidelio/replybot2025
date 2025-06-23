@@ -69,6 +69,7 @@ exports.paddleWebhook = functions.https.onRequest(async (req, res) => {
         await (0, audit_1.auditLog)({
             userId: 'system',
             action: 'paddle_webhook_received',
+            level: audit_1.LogLevel.CRITICAL,
             details: {
                 event: webhookData.event_type || 'unknown',
                 data: webhookData

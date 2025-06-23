@@ -12,7 +12,8 @@ export declare const getCreditStatus: functions.HttpsFunction & functions.Runnab
  */
 export declare const getCreditStatusHttp: functions.HttpsFunction;
 /**
- * HTTP version of consumeCredit with AI generation for extension compatibility
+ * Secure AI Response Flow - Single gatekeeper for credit consumption and AI generation
+ * Implements atomic transactions to prevent exploits and provides consolidated response
  */
 export declare const consumeCreditHttp: functions.HttpsFunction;
 /**

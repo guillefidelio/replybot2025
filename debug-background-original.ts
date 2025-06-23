@@ -1,13 +1,9 @@
 // Background service worker for AI Review Responder Chrome Extension
 // Handles API communications via Google Cloud Function (secure OpenAI proxy)
 
-// Static imports for Firebase (avoiding dynamic import issues)
-import { httpsCallable, getFunctions } from 'firebase/functions';
-import { doc, onSnapshot } from 'firebase/firestore';
-import app, { db } from '../firebase';
-
-// Google Cloud Function API configuration
+// Google Cloud Function API configuration  
 const CLOUD_FUNCTION_URL = 'https://us-central1-review-responder-backend.cloudfunctions.net/openai-proxy';
+const REQUEST_AI_GENERATION_URL = 'https://us-central1-replybot25.cloudfunctions.net/requestAIGeneration';
 
 // Enhanced logging function
 type LogData = unknown;
@@ -17,28 +13,6 @@ const log = (message: string, data?: LogData) => {
   } else {
     console.log(`[Background] ${message}`);
   }
-};
-
-// Helper function to safely convert date strings to ISO strings
-const toISOString = (dateValue?: Date | string): string => {
-  if (!dateValue) return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  if (dateValue instanceof Date) return dateValue.toISOString();
-  if (typeof dateValue === 'string') {
-    try {
-      return new Date(dateValue).toISOString();
-    } catch {
-      return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    }
-  }
-  return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-};
-
-// Helper function to get available credits from either format
-const getAvailableCredits = (credits: { available: number; total: number; used: number } | number): number => {
-  if (typeof credits === 'number') {
-    return credits;
-  }
-  return credits.available;
 };
 
 // Function to broadcast credit updates to all extension components
@@ -139,16 +113,12 @@ const handleApiError = async (response: Response): Promise<string> => {
 
 // Handshake service implementation
 interface SessionData {
-  credits: {
-    available: number;
-    total: number;
-    used: number;
-  } | number; // Support both old format (number) and new format (object)
+  credits: number;
   subscription: {
     plan: string;
     status: string;
     isActive: boolean;
-    currentPeriodEnd?: Date | string; // Can be string from Firebase, then converted to Date
+    currentPeriodEnd?: Date;
   };
   prompts: Array<{
     id: string;
@@ -164,7 +134,9 @@ const performHandshake = async (user: { uid: string; email: string }): Promise<b
   try {
     log('Performing handshake for user:', user.uid);
     
-    // Use static imports instead of dynamic imports
+    // Import Firebase functions
+    const { httpsCallable, getFunctions } = await import('firebase/functions');
+    const app = (await import('../firebase')).default;
     const functions = getFunctions(app);
     
     const getUserSessionData = httpsCallable(functions, 'getUserSessionData');
@@ -172,37 +144,9 @@ const performHandshake = async (user: { uid: string; email: string }): Promise<b
     
     log('Handshake successful, received data:', sessionData.data);
     
-    // ===================================================================
-    // VITAL FIX: Convert date strings to Date objects (rehydration)
-    // ===================================================================
-    if (sessionData.data.subscription && typeof sessionData.data.subscription.currentPeriodEnd === 'string') {
-      log('[Background] Rehydrating currentPeriodEnd from string to Date.');
-      sessionData.data.subscription.currentPeriodEnd = new Date(sessionData.data.subscription.currentPeriodEnd);
-    }
-    // Add similar checks for any other date fields you expect
-    // ===================================================================
-    
-    // ===================================================================
-    // CREDIT STRUCTURE FIX: Ensure credits are properly structured
-    // ===================================================================
-    let processedCredits = sessionData.data.credits;
-    if (typeof processedCredits === 'number') {
-      // If we get a number from old data, convert to proper structure
-      processedCredits = {
-        available: processedCredits,
-        total: processedCredits,
-        used: 0
-      };
-      log('[Background] Converted legacy credit number to structured format:', processedCredits);
-    }
-    // ===================================================================
-    
-    // Cache all data locally (now with proper Date objects and credit structure)
+    // Cache all data locally
     await chrome.storage.local.set({
-      'sessionData': {
-        ...sessionData.data,
-        credits: processedCredits
-      },
+      'sessionData': sessionData.data,
       'handshakeComplete': true,
       'lastHandshake': Date.now()
     });
@@ -242,7 +186,10 @@ async function setupIntelligentSubscriptionListener(): Promise<void> {
       subscriptionUnsubscribe = null;
     }
 
-    // Use static imports
+    // Import Firebase
+    const { doc, onSnapshot } = await import('firebase/firestore');
+    const { db } = await import('../firebase');
+
     const userId = authResult.authUser.uid;
     const userDocRef = doc(db, 'users', userId);
     
@@ -351,15 +298,6 @@ chrome.runtime.onMessage.addListener((message: IncomingMessage, _sender, sendRes
       const payload = payloadUnknown as { reviewData?: ReviewData; review?: SimpleReview; promptType?: string; prompt?: string };
       handleGenerateResponse(payload, sendResponse as ChromeSendResponse);
       return true;
-    }
-    
-    case 'generateResponseAsync': {
-      // New async pattern - don't wait for response, send result via separate message
-      const payloadUnknown = (message as IncomingMessage).payload ?? (message as IncomingMessage).data ?? message;
-      const payload = payloadUnknown as { reviewId: string; review: SimpleReview; prompt: string };
-      handleGenerateResponseAsync(payload, _sender);
-      // Don't return true - we're not using sendResponse for async pattern
-      return false;
     }
       
     case 'GET_SETTINGS':
@@ -550,24 +488,31 @@ async function handleCheckCredits(
     log('Checking credits for operation:', data.operation);
     
     // Get cached session data first for immediate response
-    const cachedData = await chrome.storage.local.get(['sessionData', 'handshakeComplete']);
+    const cachedData = await chrome.storage.local.get(['sessionData', 'handshakeComplete', 'authUser']);
+    
+    log('Cache status:', {
+      hasSessionData: !!cachedData.sessionData,
+      handshakeComplete: cachedData.handshakeComplete,
+      hasAuthUser: !!cachedData.authUser
+    });
     
     if (cachedData.handshakeComplete && cachedData.sessionData) {
       const sessionData = cachedData.sessionData as SessionData;
-      log('Using cached credit data:', sessionData.credits);
-      
-      const availableCredits = getAvailableCredits(sessionData.credits);
-      const totalCredits = typeof sessionData.credits === 'number' ? sessionData.credits : sessionData.credits.total;
+      log('Using cached credit data:', { 
+        credits: sessionData.credits,
+        plan: sessionData.subscription?.plan,
+        isActive: sessionData.subscription?.isActive
+      });
       
       const responseData = {
-        hasCredits: availableCredits > 0,
-        available: availableCredits,
-        total: totalCredits,
+        hasCredits: sessionData.credits > 0,
+        available: sessionData.credits,
+        total: sessionData.credits,
         required: 1,
-        canProceed: availableCredits > 0,
-        message: availableCredits > 0 ? 'Credits available' : 'No credits remaining',
+        canProceed: sessionData.credits > 0,
+        message: sessionData.credits > 0 ? 'Credits available' : 'No credits remaining',
         plan: sessionData.subscription.plan,
-        resetDate: toISOString(sessionData.subscription.currentPeriodEnd)
+        resetDate: sessionData.subscription.currentPeriodEnd?.toISOString() || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
       };
 
       sendResponse({
@@ -580,48 +525,61 @@ async function handleCheckCredits(
     // Fallback: No cached data available - try to perform handshake
     log('No cached data available, attempting handshake');
     
-    const authResult = await chrome.storage.local.get(['authUser']);
-    if (!authResult.authUser) {
+    if (!cachedData.authUser) {
+      log('Authentication check failed - no authUser in storage');
       sendResponse({
         success: false,
-        error: 'User not authenticated'
+        error: 'User not authenticated - please sign in again'
       });
       return;
     }
 
+    log('Auth user found, attempting handshake:', { 
+      uid: cachedData.authUser.uid, 
+      email: cachedData.authUser.email 
+    });
+
     // Try to perform handshake first
     const handshakeSuccess = await performHandshake({ 
-      uid: authResult.authUser.uid, 
-      email: authResult.authUser.email 
+      uid: cachedData.authUser.uid, 
+      email: cachedData.authUser.email 
     });
     
     if (handshakeSuccess) {
+      log('Handshake successful, retrieving fresh data');
       // Retry with cached data
       const freshData = await chrome.storage.local.get(['sessionData']);
-      const sessionData = freshData.sessionData as SessionData;
       
-      const availableCredits = getAvailableCredits(sessionData.credits);
-      const totalCredits = typeof sessionData.credits === 'number' ? sessionData.credits : sessionData.credits.total;
-      
-      const responseData = {
-        hasCredits: availableCredits > 0,
-        available: availableCredits,
-        total: totalCredits,
-        required: 1,
-        canProceed: availableCredits > 0,
-        message: availableCredits > 0 ? 'Credits available' : 'No credits remaining',
-        plan: sessionData.subscription.plan,
-        resetDate: toISOString(sessionData.subscription.currentPeriodEnd)
-      };
+      if (freshData.sessionData) {
+        const sessionData = freshData.sessionData as SessionData;
+        
+        const responseData = {
+          hasCredits: sessionData.credits > 0,
+          available: sessionData.credits,
+          total: sessionData.credits,
+          required: 1,
+          canProceed: sessionData.credits > 0,
+          message: sessionData.credits > 0 ? 'Credits available' : 'No credits remaining',
+          plan: sessionData.subscription.plan,
+          resetDate: sessionData.subscription.currentPeriodEnd?.toISOString() || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        };
 
-      sendResponse({
-        success: true,
-        data: responseData
-      });
+        sendResponse({
+          success: true,
+          data: responseData
+        });
+      } else {
+        log('Handshake succeeded but no session data found');
+        sendResponse({
+          success: false,
+          error: 'Handshake succeeded but failed to retrieve user data'
+        });
+      }
     } else {
+      log('Handshake failed');
       sendResponse({
         success: false,
-        error: 'Failed to load user data'
+        error: 'Failed to load user data - please check your internet connection and try again'
       });
     }
 
@@ -629,7 +587,7 @@ async function handleCheckCredits(
     log('Error checking credits:', error);
     sendResponse({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error checking credits'
+      error: `Credit check failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     });
   }
 }
@@ -713,122 +671,17 @@ async function handleGenerateResponse(
       reviewData
     );
 
-    // Try to send response back to content script
-    try {
-      sendResponse({
-        success: true,
-        data: {
-          responseText,
-          reviewId: reviewData.id,
-          rating
-        }
-      });
-    } catch (connectionError) {
-      log('Content script no longer available to receive response (user may have navigated away):', connectionError);
-      // This is not a critical error - the AI generation was successful,
-      // but the user is no longer on the page to see the result
-    }
+    sendResponse({
+      success: true,
+      data: {
+        responseText,
+        reviewId: reviewData.id,
+        rating
+      }
+    });
   } catch (error) {
     log('Error in handleGenerateResponse:', error);
-    
-    // Try to send error response, but handle connection issues gracefully
-    try {
-      sendResponse({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
-    } catch (connectionError) {
-      log('Could not send error response - content script no longer available:', connectionError);
-    }
-  }
-}
-
-// New async handler - doesn't use sendResponse, sends messages directly to content script
-async function handleGenerateResponseAsync(
-  data: { reviewId: string; review: SimpleReview; prompt: string },
-  sender: chrome.runtime.MessageSender
-): Promise<void> {
-  try {
-    log('Starting async AI generation for review:', data.reviewId);
-    
-    // Get current user authentication
-    const authResult = await chrome.storage.local.get(['authUser']);
-    if (!authResult.authUser) {
-      // Send failure message to content script
-      await sendMessageToTab(sender.tab?.id, {
-        type: 'AI_RESPONSE_FAILED',
-        data: {
-          reviewId: data.reviewId,
-          error: 'User not authenticated'
-        }
-      });
-      return;
-    }
-
-    // Convert SimpleReview to ReviewData
-    const reviewData: ReviewData = {
-      id: data.reviewId,
-      reviewer: data.review.author,
-      rating: data.review.score,
-      text: data.review.content
-    };
-
-    // Build prompts for OpenAI
-    const systemPrompt = `You are a professional business owner responding to a customer review.\n\nPlease generate a professional, personalized response based on this template:\n"${data.prompt}"\n\nMake the response:\n- Professional and courteous\n- Personalized to the specific review\n- Appropriate for the rating given\n- Around 1-2 sentences for ratings 4-5, slightly longer for lower ratings\n- Natural and authentic, not robotic\n\nGenerate only the response text, no additional formatting or quotes.`;
-
-    const userPrompt = `Review by ${reviewData.reviewer || 'Anonymous'} (${reviewData.rating}/5 stars): ${reviewData.text || 'No text provided'}`;
-
-    log('=== AI PROMPT BEING SENT (ASYNC) ===');
-    log('System prompt:', systemPrompt);
-    log('User prompt:', userPrompt);
-    log('=== END AI PROMPT ===');
-
-    // Generate the AI response asynchronously
-    const responseText = await generateAsyncAIResponse(
-      systemPrompt, 
-      userPrompt, 
-      authResult.authUser.uid,
-      authResult.authUser.email,
-      reviewData
-    );
-
-    // Get updated credit count
-    const sessionData = (await chrome.storage.local.get(['sessionData'])).sessionData as SessionData;
-    const creditsRemaining = getAvailableCredits(sessionData.credits);
-
-    // Send success message to content script
-    await sendMessageToTab(sender.tab?.id, {
-      type: 'AI_RESPONSE_COMPLETED',
-      data: {
-        reviewId: data.reviewId,
-        responseText,
-        creditsRemaining
-      }
-    });
-
-  } catch (error) {
-    log('Error in handleGenerateResponseAsync:', error);
-    
-    // Send failure message to content script
-    await sendMessageToTab(sender.tab?.id, {
-      type: 'AI_RESPONSE_FAILED',
-      data: {
-        reviewId: data.reviewId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
-    });
-  }
-}
-
-// Helper function to send messages to specific tabs
-async function sendMessageToTab(tabId: number | undefined, message: any): Promise<void> {
-  if (!tabId) {
-    log('No tab ID available to send message to');
-    return;
-  }
-  
-  try {
-    await chrome.tabs.sendMessage(tabId, message);
-    log('Message sent to tab:', { tabId, messageType: message.type });
-  } catch (error) {
-    log('Failed to send message to tab (tab may be closed):', error);
+    sendResponse({ success: false, error: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
 
@@ -875,26 +728,20 @@ async function generateAsyncAIResponse(
 
     log('Requesting AI generation job creation:', requestBody);
 
-    // Step 1: Request job creation using Firebase Functions SDK (fast, < 500ms)
-    const functions = getFunctions(app);
-    const requestAIGeneration = httpsCallable(functions, 'requestAIGeneration');
-    
-    let result: any;
-    try {
-      log('Calling Firebase Function requestAIGeneration with:', requestBody);
-      result = await requestAIGeneration(requestBody);
-      log('Firebase Function call successful:', result);
-    } catch (firebaseError: any) {
-      log('Firebase Function call failed:', {
-        code: firebaseError.code,
-        message: firebaseError.message,
-        details: firebaseError.details,
-        rawError: firebaseError
-      });
-      throw new Error(`Firebase Function error: ${firebaseError.message} (${firebaseError.code})`);
+    // Step 1: Request job creation (fast, < 500ms)
+    const response = await fetch(REQUEST_AI_GENERATION_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-    
-    const jobData = result.data as any;
+
+    const jobData = await response.json();
     log('Job creation response:', jobData);
 
     // Handle job creation results
@@ -935,29 +782,16 @@ async function generateAsyncAIResponse(
 // Helper function to update local credit cache and broadcast
 async function updateLocalCreditCache(newCredits: number): Promise<void> {
   const currentSessionData = (await chrome.storage.local.get(['sessionData'])).sessionData || {};
-  
-  // Preserve the total credits, only update available
-  const currentCredits = currentSessionData.credits || {};
-  const originalTotal = typeof currentCredits === 'number' ? currentCredits : (currentCredits.total || 10);
-  
-  const updatedCredits = {
-    available: newCredits,
-    total: originalTotal,
-    used: originalTotal - newCredits
-  };
-  
   await chrome.storage.local.set({
     sessionData: {
       ...currentSessionData,
-      credits: updatedCredits
+      credits: newCredits
     }
   });
   
-  // Broadcast credit update to UI with proper structure
+  // Broadcast credit update to UI
   await broadcastCreditUpdate({ 
-    credits: updatedCredits,
-    available: newCredits,
-    total: originalTotal,
+    credits: newCredits,
     hasCredits: newCredits > 0
   });
 }
@@ -966,7 +800,10 @@ async function updateLocalCreditCache(newCredits: number): Promise<void> {
 async function waitForJobCompletion(userId: string, jobId: string): Promise<string> {
   return new Promise(async (resolve, reject) => {
     try {
-      // Use static imports
+      // Import Firebase
+      const { doc, onSnapshot } = await import('firebase/firestore');
+      const { db } = await import('../firebase');
+
       log(`Setting up temporary listener for job ${jobId}`);
       
       // Setup temporary listener on the specific job document

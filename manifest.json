@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "AI Review Responder",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Automatically respond to Google My Business reviews using AI-generated responses",
   
   "permissions": [
     "activeTab",
     "storage",
-    "scripting"
+    "scripting",
+    "notifications"
   ],
   
   "host_permissions": [

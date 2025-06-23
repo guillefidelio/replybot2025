@@ -1,9 +1,7 @@
 import { 
   doc, 
-  onSnapshot, 
   getDoc,
-  type Unsubscribe,
-  type DocumentSnapshot
+  type Unsubscribe
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import type { User } from 'firebase/auth';
@@ -308,62 +306,19 @@ export class CreditService {
     });
   }
 
-  // Setup real-time user document listener
-  private async setupUserListener(user: User): Promise<void> {
-    // Clean up existing listener
+  // DEPRECATED: Real-time listeners removed for cost optimization
+  // Credit updates now come from the background script via handshake and AI responses
+  private async setupUserListener(_user: User): Promise<void> {
+    console.log('[CreditService] Real-time listeners deprecated - using cached data from handshake');
+    
+    // Clean up existing listener if any
     if (this.userUnsubscribe) {
       this.userUnsubscribe();
+      this.userUnsubscribe = null;
     }
 
-    try {
-      const userDocRef = doc(db, 'users', user.uid);
-      
-      this.userUnsubscribe = onSnapshot(
-        userDocRef,
-        (doc) => this.handleUserDocumentUpdate(doc),
-        (error) => this.handleUserDocumentError(error)
-      );
-
-      console.log('[CreditService] User listener setup complete');
-    } catch (error) {
-      console.error('[CreditService] Error setting up user listener:', error);
-      this.emitError(new Error(`Failed to setup user listener: ${error}`));
-    }
-  }
-
-  // Handle user document updates from Firestore
-  private handleUserDocumentUpdate(doc: DocumentSnapshot): void {
-    if (!doc.exists()) {
-      console.warn('[CreditService] User document does not exist');
-      this.creditStatusCache = null;
-      return;
-    }
-
-    try {
-      const userData = doc.data();
-      const creditStatus = this.parseUserDataToCreditStatus(userData);
-      
-      // Update cache
-      this.creditStatusCache = creditStatus;
-      this.lastSyncTime = new Date();
-      
-      // Save to persistent cache
-      this.saveToCache(creditStatus);
-      
-      // Emit update to listeners
-      this.emitCreditUpdate(creditStatus);
-      
-      console.log('[CreditService] Credit status updated:', creditStatus);
-    } catch (error) {
-      console.error('[CreditService] Error processing user document update:', error);
-      this.emitError(new Error(`Failed to process credit update: ${error}`));
-    }
-  }
-
-  // Handle user document listener errors
-  private handleUserDocumentError(error: Error): void {
-    console.error('[CreditService] User document listener error:', error);
-    this.emitError(new Error(`Real-time sync error: ${error.message}`));
+    // Load initial data from cache instead
+    await this.loadInitialCreditStatus();
   }
 
   // Parse user data to CreditStatus format

@@ -44,6 +44,7 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
       this.loadSettings();
       this.init();
       this.setupAuthListener();
+      this.setupAIResponseListener();
     }
 
     private async loadSettings() {
@@ -283,6 +284,161 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
             }, 1000);
           }
         }
+      });
+    }
+
+    private setupAIResponseListener() {
+      if (!chrome.runtime?.id) return;
+      // Listen for AI response completion from background script
+      chrome.runtime.onMessage.addListener((message) => {
+        if (message.type === 'AI_RESPONSE_COMPLETED') {
+          console.log('[ReviewDetector] AI response completed:', message.data);
+          this.handleAIResponseCompleted(message.data);
+        } else if (message.type === 'AI_RESPONSE_FAILED') {
+          console.log('[ReviewDetector] AI response failed:', message.data);
+          this.handleAIResponseFailed(message.data);
+        }
+      });
+    }
+
+    private handleAIResponseCompleted(data: { reviewId: string; responseText: string; creditsRemaining: number }) {
+      const { reviewId, responseText, creditsRemaining } = data;
+      
+      // Find the review element and button
+      const reviewData = this.findReviewById(reviewId);
+      if (!reviewData) {
+        console.warn('[ReviewDetector] Could not find review for completed AI response:', reviewId);
+        return;
+      }
+
+      // Reset button state
+      const button = reviewData.element.querySelector('.ai-response-button') as HTMLElement;
+      if (button) {
+        const textSpan = button.querySelector('span:last-child');
+        const iconSpan = button.querySelector('span:first-child');
+        
+        if (textSpan && iconSpan) {
+          iconSpan.textContent = '🤖';
+          textSpan.textContent = 'Respond with AI';
+        }
+        button.removeAttribute('disabled');
+        button.style.opacity = '1';
+      }
+
+      // Handle the response based on trust mode
+      const trustModeEnabled = this.settings?.trustModes?.individual || false;
+      
+      if (trustModeEnabled) {
+        // Trust mode: auto-fill and auto-submit
+        this.fillResponseAndSubmit(reviewData, responseText, true);
+        this.showNotification(`AI response generated and posted automatically! (${creditsRemaining} credits remaining)`, 'success');
+      } else {
+        // Preview mode: just fill the response for user review
+        this.fillResponseAndSubmit(reviewData, responseText, false);
+        this.showNotification(`AI response generated! Please review and post manually. (${creditsRemaining} credits remaining)`, 'info');
+      }
+    }
+
+    private handleAIResponseFailed(data: { reviewId: string; error: string }) {
+      const { reviewId, error } = data;
+      
+      // Find the review element and button
+      const reviewData = this.findReviewById(reviewId);
+      if (!reviewData) {
+        console.warn('[ReviewDetector] Could not find review for failed AI response:', reviewId);
+        return;
+      }
+
+      // Reset button state
+      const button = reviewData.element.querySelector('.ai-response-button') as HTMLElement;
+      if (button) {
+        const textSpan = button.querySelector('span:last-child');
+        const iconSpan = button.querySelector('span:first-child');
+        
+        if (textSpan && iconSpan) {
+          iconSpan.textContent = '🤖';
+          textSpan.textContent = 'Respond with AI';
+        }
+        button.removeAttribute('disabled');
+        button.style.opacity = '1';
+      }
+
+      // Show error notification
+      if (error.includes('credit')) {
+        this.showNotification('Credit error: ' + error, 'error');
+      } else {
+        this.showNotification('Error generating AI response. Please try again.', 'error');
+      }
+    }
+
+    private findReviewById(reviewId: string): ReviewData | null {
+      // Find the review element by scanning current reviews
+      const reviewElements = document.querySelectorAll('.GYpYWe');
+      
+      for (let index = 0; index < reviewElements.length; index++) {
+        const reviewElement = reviewElements[index] as HTMLElement;
+        const reviewData = this.extractReviewData(reviewElement, index);
+        
+        if (reviewData && reviewData.id === reviewId) {
+          return reviewData;
+        }
+      }
+      
+      return null;
+    }
+
+    private async getPromptForReview(review: OpenAIReview): Promise<string> {
+      return new Promise((resolve) => {
+        chrome.storage.local.get(['prompts',
+          'positivePrompt5WithText',
+          'positivePrompt5WithoutText',
+          'positivePrompt4WithText',
+          'positivePrompt4WithoutText',
+          'neutralPrompt3WithText',
+          'neutralPrompt3WithoutText',
+          'negativePrompt1_2WithText',
+          'negativePrompt1_2WithoutText'
+        ], (result) => {
+          let prompt: string | undefined;
+
+          const textHasContent = isMeaningfulContent(review.content);
+
+          // 1) Try individual keys first (user may have customised these via options page)
+          if (!prompt) {
+            if (review.score === 5) {
+              prompt = textHasContent ? result.positivePrompt5WithText : result.positivePrompt5WithoutText;
+            } else if (review.score === 4) {
+              prompt = textHasContent ? result.positivePrompt4WithText : result.positivePrompt4WithoutText;
+            } else if (review.score === 3) {
+              prompt = textHasContent ? result.neutralPrompt3WithText : result.neutralPrompt3WithoutText;
+            } else if (review.score <= 2) {
+              prompt = textHasContent ? result.negativePrompt1_2WithText : result.negativePrompt1_2WithoutText;
+            }
+          }
+
+          // 2) Fallback to unified prompts object if still not found
+          if (!prompt) {
+            const storedPrompts = (result.prompts || {}) as Record<string, string>;
+            if (Object.keys(storedPrompts).length > 0) {
+              const keyBase = review.score.toString();
+              const variant = textHasContent ? 'text' : 'no_text';
+              const altVariant = textHasContent ? 'text' : 'no_text';
+              const possibleKeys = [`${keyBase}_${variant}`, `${keyBase}_${altVariant}`];
+              for (const k of possibleKeys) {
+                if (storedPrompts[k]) {
+                  prompt = storedPrompts[k];
+                  break;
+                }
+              }
+            }
+          }
+
+          if (!prompt) {
+            prompt = 'Please provide a polite and helpful response to this review.';
+          }
+
+          resolve(prompt);
+        });
       });
     }
 
@@ -594,56 +750,41 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
           textSpan.textContent = 'Generating...';
         }
 
-        // STEP 2: Generate AI response (this will consume credits)
+        // STEP 2: Initiate AI response generation (async - no waiting for response)
         const aiReview: OpenAIReview = {
           author: reviewData.reviewer,
           score: reviewData.rating,
           content: reviewData.text
         };
-        const response = await generateAIResponse(aiReview);
-        log('Background script response:', response);
         
-        if (!response.success) {
-          throw new Error(response.error);
-        }
+        // Send async request to background script - response will come via message listener
+        chrome.runtime.sendMessage({
+          action: 'generateResponseAsync',
+          reviewId: reviewData.id,
+          review: {
+            author: aiReview.author,
+            score: aiReview.score,
+            content: aiReview.content || `[${aiReview.score}-star review without text]`
+          },
+          prompt: await this.getPromptForReview(aiReview)
+        });
         
-        const responseText = response.data.responseText;
-        console.log('Generated AI response:', responseText);
+        console.log('[ReviewDetector] AI generation request sent asynchronously for review:', reviewData.id);
+        // Response handling will be done by handleAIResponseCompleted/Failed methods
+        // Button state will be reset by the response handlers
         
-        // STEP 3: Handle the response based on trust mode
-        const trustModeEnabled = this.settings?.trustModes?.individual || false;
-        
-        if (trustModeEnabled) {
-          // Trust mode: auto-fill and auto-submit
-          await this.fillResponseAndSubmit(reviewData, responseText, true);
-          this.showNotification(`AI response generated and posted automatically! (${creditCheck.available - 1} credits remaining)`, 'success');
-        } else {
-          // Preview mode: just fill the response for user review
-          await this.fillResponseAndSubmit(reviewData, responseText, false);
-          this.showNotification(`AI response generated! Please review and post manually. (${creditCheck.available - 1} credits remaining)`, 'info');
-        }
       } catch (error) {
-        console.error('Error generating AI response:', error);
+        console.error('Error initiating AI response generation:', error);
         
-        // Check if it's a credit-related error
-        if (error instanceof Error && error.message.includes('credit')) {
-          this.showNotification('Credit error: ' + error.message, 'error');
-          // Re-check credits to get updated status
-          const updatedCreditCheck = await this.checkCreditAvailability();
-          if (!updatedCreditCheck.canProceed) {
-            await this.showCreditExhaustionModal(updatedCreditCheck);
-          }
-        } else {
-          this.showNotification('Error generating AI response. Please try again.', 'error');
-        }
-      } finally {
-        // Reset button state
+        // Reset button state for immediate errors (like prompt loading failures)
         if (textSpan && iconSpan) {
           iconSpan.textContent = '🤖';
           textSpan.textContent = 'Respond with AI';
         }
         button.removeAttribute('disabled');
         button.style.opacity = '1';
+        
+        this.showNotification('Error starting AI response generation. Please try again.', 'error');
       }
     }
 

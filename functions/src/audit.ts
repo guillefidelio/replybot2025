@@ -3,9 +3,17 @@ import * as functions from 'firebase-functions';
 
 const db = admin.firestore();
 
+// Phase 1.2: Log Levels for Strategic Filtering
+export enum LogLevel {
+  CRITICAL = 'CRITICAL',  // Security-sensitive, payments, subscriptions, admin actions
+  INFO = 'INFO',          // Important state-changing user actions
+  DEBUG = 'DEBUG'         // Development-only (not written in production)
+}
+
 export interface AuditLogEntry {
   userId: string;
   action: string;
+  level: LogLevel;        // NEW: Required log level
   details: any;
   timestamp: Date;
   ip?: string;
@@ -24,27 +32,95 @@ export interface SecurityEvent {
   timestamp: Date;
 }
 
+// Phase 2.1: Batch Writing System
+class AuditLogBatcher {
+  private static instance: AuditLogBatcher;
+  private pendingLogs: AuditLogEntry[] = [];
+  private batchTimer: NodeJS.Timeout | null = null;
+  private readonly BATCH_SIZE = 10;
+  private readonly BATCH_TIMEOUT_MS = 5000; // 5 seconds
+
+  static getInstance(): AuditLogBatcher {
+    if (!AuditLogBatcher.instance) {
+      AuditLogBatcher.instance = new AuditLogBatcher();
+    }
+    return AuditLogBatcher.instance;
+  }
+
+  addLog(entry: AuditLogEntry): void {
+    this.pendingLogs.push(entry);
+    
+    // Trigger batch write if we hit the batch size or set a timer
+    if (this.pendingLogs.length >= this.BATCH_SIZE) {
+      this.flushBatch();
+    } else if (!this.batchTimer) {
+      this.batchTimer = setTimeout(() => this.flushBatch(), this.BATCH_TIMEOUT_MS);
+    }
+  }
+
+  private async flushBatch(): Promise<void> {
+    if (this.pendingLogs.length === 0) return;
+
+    const logsToWrite = [...this.pendingLogs];
+    this.pendingLogs = [];
+    
+    if (this.batchTimer) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
+
+    try {
+      const batch = db.batch();
+      
+      logsToWrite.forEach(entry => {
+        const logEntry = {
+          ...entry,
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+          id: generateLogId(),
+          version: '2.0' // Updated version for new architecture
+        };
+        
+        // Phase 1.1: SINGLE SOURCE OF TRUTH - Only write to top-level auditLogs
+        const docRef = db.collection('auditLogs').doc();
+        batch.set(docRef, logEntry);
+      });
+
+      await batch.commit();
+      console.log(`[AuditBatch] Successfully wrote ${logsToWrite.length} audit logs`);
+      
+    } catch (error) {
+      console.error('[AuditBatch] Error writing batch:', error);
+      // Re-add failed logs to retry (optional)
+      this.pendingLogs.unshift(...logsToWrite);
+    }
+  }
+
+  // Force flush for critical logs or end of function execution
+  async forceFlusth(): Promise<void> {
+    await this.flushBatch();
+  }
+}
+
 /**
- * Main audit logging function
+ * Phase 1: Refactored Main Audit Logging Function
+ * - Single source of truth (no dual writes)
+ * - Level-based filtering
+ * - Batch writing support
  */
 export async function auditLog(entry: AuditLogEntry): Promise<void> {
   try {
-    const logEntry = {
-      ...entry,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      id: generateLogId(),
-      version: '1.0'
-    };
+    // Phase 1.2: Filter out DEBUG logs in production
+    if (entry.level === LogLevel.DEBUG && process.env.NODE_ENV === 'production') {
+      return;
+    }
 
-    // Store in audit logs collection
-    await db.collection('auditLogs').add(logEntry);
+    // Phase 2.1: Use batch writing for performance
+    const batcher = AuditLogBatcher.getInstance();
+    batcher.addLog(entry);
 
-    // Also store in user-specific subcollection for easy querying
-    if (entry.userId) {
-      await db.collection('users')
-        .doc(entry.userId)
-        .collection('auditLogs')
-        .add(logEntry);
+    // For CRITICAL logs, force immediate write
+    if (entry.level === LogLevel.CRITICAL) {
+      await batcher.forceFlusth();
     }
 
     // Check for critical actions that need immediate attention
@@ -57,7 +133,7 @@ export async function auditLog(entry: AuditLogEntry): Promise<void> {
 }
 
 /**
- * Security event logging
+ * Security event logging (unchanged but optimized)
  */
 export async function logSecurityEvent(event: SecurityEvent): Promise<void> {
   try {
@@ -81,7 +157,7 @@ export async function logSecurityEvent(event: SecurityEvent): Promise<void> {
 }
 
 /**
- * Log credit operations specifically
+ * Phase 1.2: Refactored Credit Operations Logging with Levels
  */
 export async function logCreditOperation(
   userId: string,
@@ -91,9 +167,18 @@ export async function logCreditOperation(
   balanceAfter: number,
   metadata: any = {}
 ): Promise<void> {
+  // Determine log level based on operation
+  let level: LogLevel;
+  if (operation === 'adjust') {
+    level = LogLevel.CRITICAL; // Admin credit adjustments are critical
+  } else {
+    level = LogLevel.INFO; // Normal consumption/addition is informational
+  }
+
   const entry: AuditLogEntry = {
     userId,
     action: `credit_${operation}`,
+    level,
     details: {
       operation,
       amount,
@@ -108,7 +193,7 @@ export async function logCreditOperation(
 }
 
 /**
- * Log authentication events
+ * Phase 1.2: Refactored Authentication Logging - Remove Noise
  */
 export async function logAuthEvent(
   userId: string,
@@ -117,9 +202,23 @@ export async function logAuthEvent(
   ip?: string,
   userAgent?: string
 ): Promise<void> {
+  // Phase 1.2: REMOVE NOISE - Don't log routine token refreshes
+  if (event === 'token_refresh') {
+    return;
+  }
+
+  // Determine log level
+  let level: LogLevel;
+  if (event === 'password_change' || (event === 'login' && !success)) {
+    level = LogLevel.CRITICAL; // Security-sensitive events
+  } else {
+    level = LogLevel.INFO; // Normal login/logout
+  }
+
   const entry: AuditLogEntry = {
     userId,
     action: `auth_${event}`,
+    level,
     details: {
       event,
       success,
@@ -148,7 +247,7 @@ export async function logAuthEvent(
 }
 
 /**
- * Log admin actions
+ * Admin actions logging - Always CRITICAL level
  */
 export async function logAdminAction(
   adminUserId: string,
@@ -160,6 +259,7 @@ export async function logAdminAction(
   const entry: AuditLogEntry = {
     userId: adminUserId,
     action: `admin_${action}`,
+    level: LogLevel.CRITICAL, // All admin actions are critical
     details: {
       action,
       targetUserId,
@@ -190,7 +290,38 @@ export async function logAdminAction(
 }
 
 /**
- * Get audit logs for a user with pagination
+ * Phase 1.2: New AI Generation Logging with Appropriate Levels
+ */
+export async function logAIGeneration(
+  userId: string,
+  action: 'requested' | 'completed' | 'failed',
+  jobId: string,
+  details: any = {}
+): Promise<void> {
+  // Only log completion and failures, not every request
+  if (action === 'requested') {
+    return; // Remove noise - job creation is tracked elsewhere
+  }
+
+  const level = action === 'failed' ? LogLevel.CRITICAL : LogLevel.INFO;
+
+  const entry: AuditLogEntry = {
+    userId,
+    action: `ai_generation_${action}`,
+    level,
+    details: {
+      jobId,
+      action,
+      ...details
+    },
+    timestamp: new Date()
+  };
+
+  await auditLog(entry);
+}
+
+/**
+ * Phase 1.1: Updated User Audit Logs Query - Now queries single source
  */
 export const getUserAuditLogs = functions.https.onCall(async (data, context) => {
   try {
@@ -200,16 +331,16 @@ export const getUserAuditLogs = functions.https.onCall(async (data, context) => 
     }
 
     const userId = context.auth.uid;
-    const { limit = 50, startAfter, action } = data;
+    const { limit = 50, startAfter, action, level } = data;
 
     // Validate limit
     if (limit > 100) {
       throw new functions.https.HttpsError('invalid-argument', 'Limit cannot exceed 100');
     }
 
-    let query = db.collection('users')
-      .doc(userId)
-      .collection('auditLogs')
+    // Phase 1.1: Query from single source of truth
+    let query = db.collection('auditLogs')
+      .where('userId', '==', userId)
       .orderBy('timestamp', 'desc')
       .limit(limit);
 
@@ -218,13 +349,14 @@ export const getUserAuditLogs = functions.https.onCall(async (data, context) => 
       query = query.where('action', '==', action);
     }
 
+    // Filter by level if specified
+    if (level) {
+      query = query.where('level', '==', level);
+    }
+
     // Pagination
     if (startAfter) {
-      const startDoc = await db.collection('users')
-        .doc(userId)
-        .collection('auditLogs')
-        .doc(startAfter)
-        .get();
+      const startDoc = await db.collection('auditLogs').doc(startAfter).get();
       query = query.startAfter(startDoc);
     }
 
@@ -250,7 +382,7 @@ export const getUserAuditLogs = functions.https.onCall(async (data, context) => 
 });
 
 /**
- * Get security logs (admin only)
+ * Get security logs (admin only) - unchanged
  */
 export const getSecurityLogs = functions.https.onCall(async (data, context) => {
   try {
@@ -325,11 +457,16 @@ function generateLogId(): string {
  * Check for critical actions that need immediate attention
  */
 async function checkCriticalActions(entry: AuditLogEntry): Promise<void> {
+  if (entry.level !== LogLevel.CRITICAL) {
+    return; // Only check critical level logs
+  }
+
   const criticalActions = [
     'credit_adjust',
     'admin_delete_user',
     'admin_change_role',
-    'admin_block_user'
+    'admin_block_user',
+    'ai_generation_failed'
   ];
 
   if (criticalActions.includes(entry.action)) {
@@ -381,34 +518,74 @@ async function sendSecurityAlert(event: SecurityEvent): Promise<void> {
 }
 
 /**
- * Cleanup old audit logs (scheduled function)
+ * Phase 2.2: Tiered Data Retention Policy
  */
 export const cleanupAuditLogs = functions.pubsub.schedule('0 2 * * *').onRun(async (context) => {
   try {
-    // Delete audit logs older than 1 year
-    const cutoffDate = new Date();
-    cutoffDate.setFullYear(cutoffDate.getFullYear() - 1);
+    const now = new Date();
+    
+    // Different retention periods based on log level
+    const infoRetentionDate = new Date(now);
+    infoRetentionDate.setDate(infoRetentionDate.getDate() - 90); // 90 days for INFO
+    
+    const criticalRetentionDate = new Date(now);
+    criticalRetentionDate.setFullYear(criticalRetentionDate.getFullYear() - 1); // 365 days for CRITICAL
 
-    const batch = db.batch();
-    let deleteCount = 0;
+    let totalDeleted = 0;
 
-    // Get old logs in batches
-    const oldLogsSnapshot = await db.collection('auditLogs')
-      .where('timestamp', '<', cutoffDate)
+    // Delete old INFO level logs (90 days)
+    const infoLogsSnapshot = await db.collection('auditLogs')
+      .where('level', '==', LogLevel.INFO)
+      .where('timestamp', '<', infoRetentionDate)
       .limit(500)
       .get();
 
-    oldLogsSnapshot.docs.forEach(doc => {
-      batch.delete(doc.ref);
-      deleteCount++;
-    });
-
-    if (deleteCount > 0) {
-      await batch.commit();
-      console.log(`Deleted ${deleteCount} old audit logs`);
+    if (!infoLogsSnapshot.empty) {
+      const infoBatch = db.batch();
+      infoLogsSnapshot.docs.forEach(doc => {
+        infoBatch.delete(doc.ref);
+      });
+      await infoBatch.commit();
+      totalDeleted += infoLogsSnapshot.docs.length;
+      console.log(`Deleted ${infoLogsSnapshot.docs.length} old INFO audit logs`);
     }
 
-    return { deletedCount: deleteCount };
+    // Delete old CRITICAL level logs (365 days)
+    const criticalLogsSnapshot = await db.collection('auditLogs')
+      .where('level', '==', LogLevel.CRITICAL)
+      .where('timestamp', '<', criticalRetentionDate)
+      .limit(500)
+      .get();
+
+    if (!criticalLogsSnapshot.empty) {
+      const criticalBatch = db.batch();
+      criticalLogsSnapshot.docs.forEach(doc => {
+        criticalBatch.delete(doc.ref);
+      });
+      await criticalBatch.commit();
+      totalDeleted += criticalLogsSnapshot.docs.length;
+      console.log(`Deleted ${criticalLogsSnapshot.docs.length} old CRITICAL audit logs`);
+    }
+
+    // Also clean up legacy logs without level field (assume INFO level)
+    const legacyLogsSnapshot = await db.collection('auditLogs')
+      .where('timestamp', '<', infoRetentionDate)
+      .limit(500)
+      .get();
+
+    if (!legacyLogsSnapshot.empty) {
+      const legacyBatch = db.batch();
+      legacyLogsSnapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (!data.level) { // Only delete if no level field (legacy logs)
+          legacyBatch.delete(doc.ref);
+        }
+      });
+      await legacyBatch.commit();
+      console.log(`Cleaned up legacy audit logs`);
+    }
+
+    return { deletedCount: totalDeleted };
   } catch (error) {
     console.error('Error cleaning up audit logs:', error);
     throw error;
@@ -435,7 +612,7 @@ export const exportAuditLogs = functions.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError('permission-denied', 'Admin access required');
     }
 
-    const { startDate, endDate, userId: targetUserId, format = 'json' } = data;
+    const { startDate, endDate, userId: targetUserId, level, format = 'json' } = data;
 
     // Validate date range
     const start = new Date(startDate);
@@ -454,6 +631,10 @@ export const exportAuditLogs = functions.https.onCall(async (data, context) => {
       query = query.where('userId', '==', targetUserId);
     }
 
+    if (level) {
+      query = query.where('level', '==', level);
+    }
+
     const snapshot = await query.get();
     const logs = snapshot.docs.map(doc => doc.data());
 
@@ -461,6 +642,7 @@ export const exportAuditLogs = functions.https.onCall(async (data, context) => {
     await logAdminAction(userId, 'export_audit_logs', targetUserId, {
       startDate,
       endDate,
+      level,
       recordCount: logs.length,
       format
     });
@@ -471,7 +653,8 @@ export const exportAuditLogs = functions.https.onCall(async (data, context) => {
         exportedBy: userId,
         exportDate: new Date().toISOString(),
         recordCount: logs.length,
-        dateRange: { startDate, endDate }
+        dateRange: { startDate, endDate },
+        level
       }
     };
 
@@ -482,4 +665,40 @@ export const exportAuditLogs = functions.https.onCall(async (data, context) => {
     }
     throw new functions.https.HttpsError('internal', 'Failed to export audit logs');
   }
-}); 
+});
+
+/**
+ * Phase 3.1: Dedicated Logging Sink for Long-term Storage
+ */
+export const auditLogSink = functions.firestore
+  .document('auditLogs/{logId}')
+  .onWrite(async (change, context) => {
+    try {
+      // Only process new documents (not updates or deletes)
+      if (!change.after.exists) {
+        return;
+      }
+
+      const logData = change.after.data();
+      
+      // Stream to Google Cloud Logging for long-term storage
+      // This is a placeholder - implement based on your preferred sink
+      console.log('[AuditSink] Streaming log to external storage:', {
+        logId: context.params.logId,
+        userId: logData?.userId,
+        action: logData?.action,
+        level: logData?.level,
+        timestamp: logData?.timestamp
+      });
+
+      // Example: Stream to BigQuery
+      // await streamToBigQuery(logData);
+      
+      // Example: Stream to Cloud Logging
+      // await streamToCloudLogging(logData);
+
+    } catch (error) {
+      console.error('[AuditSink] Error streaming audit log:', error);
+      // Don't throw - this is a best-effort operation
+    }
+  }); 
