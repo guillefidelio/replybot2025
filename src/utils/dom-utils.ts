@@ -304,4 +304,89 @@ export function debounce<T extends (...args: any[]) => void>(
     clearTimeout(timeout);
     timeout = setTimeout(() => func.apply(null, args), wait);
   }) as T;
+}
+
+/**
+ * Extract a stable business identifier from the current page
+ * This is used for business-level free trial enforcement
+ */
+export function extractBusinessId(): string | null {
+  try {
+    const url = window.location.href;
+    
+    // Method 1: Extract from Business Dashboard URLs  
+    if (url.includes('business.google.com')) {
+      console.log('[BusinessId] Detected business dashboard page');
+      
+      // Look for patterns like /businesses/123456789 or /groups/123456789
+      const businessMatch = url.match(/\/(?:businesses|groups)\/([^\/\?#]+)/);
+      if (businessMatch && businessMatch[1]) {
+        console.log('[BusinessId] Found business path:', businessMatch[1]);
+        return businessMatch[1];
+      }
+      
+      // Look for account ID in URL parameters
+      const accountMatch = url.match(/[?&]account=([^&]+)/);
+      if (accountMatch && accountMatch[1]) {
+        console.log('[BusinessId] Found account parameter:', accountMatch[1]);
+        return accountMatch[1];
+      }
+    }
+    
+    // Method 2: Look for data-lid attributes in the DOM (primary method for Google search)
+    // Google uses data-lid for location identifiers in search results
+    const elementWithLid = document.querySelector('[data-lid]');
+    if (elementWithLid) {
+      const lid = elementWithLid.getAttribute('data-lid');
+      if (lid && lid.length > 0) {
+        console.log('[BusinessId] Found data-lid:', lid);
+        return lid;
+      }
+    }
+    
+    // Method 3: Extract from meta tags or other DOM elements
+    const metaElements = document.querySelectorAll('meta[name*="business"], meta[name*="location"]');
+    for (const meta of metaElements) {
+      const content = meta.getAttribute('content');
+      if (content && content.length > 5) {
+        return content;
+      }
+    }
+    
+    // Method 4: Look for business info in scripts or other elements
+    const scripts = document.querySelectorAll('script');
+    for (const script of scripts) {
+      const scriptContent = script.textContent || '';
+      
+      // Look for patterns like "businessId":"123456" or "locationId":"123456"
+      const businessIdMatch = scriptContent.match(/["\'](?:businessId|locationId|placeId)["\']:\s*["\']([^"\']+)["\']/) ;
+      if (businessIdMatch && businessIdMatch[1]) {
+        return businessIdMatch[1];
+      }
+    }
+    
+    // Method 5: Fallback - create a hash from the business name and URL
+    const businessNameElement = document.querySelector('h1, [role="heading"], .business-name');
+    if (businessNameElement) {
+      const businessName = getTextContent(businessNameElement);
+      if (businessName && businessName.length > 0) {
+        // Create a stable hash from business name + hostname
+        const combined = `${businessName.trim().toLowerCase()}_${window.location.hostname}`;
+        return btoa(combined).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      }
+    }
+    
+    // Method 6: Ultimate fallback - use URL path hash
+    const pathHash = btoa(window.location.pathname).replace(/[^a-zA-Z0-9]/g, '').substring(0, 15);
+    if (pathHash.length > 5) {
+      return pathHash;
+    }
+    
+    console.warn('[BusinessId] Could not extract business identifier from page');
+    return null;
+    
+  } catch (error) {
+    console.error('[BusinessId] Error extracting business ID:', error);
+    return null;
+  }
 } 

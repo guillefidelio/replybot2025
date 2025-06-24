@@ -334,6 +334,167 @@ function showCreditExhaustionModal(creditInfo: CreditCheckResult): Promise<boole
   });
 }
 
+/**
+ * Show business trial already used modal
+ */
+function showBusinessTrialUsedModal(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 10004;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Google Sans', Roboto, Arial, sans-serif;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 450px;
+      width: 90%;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+      color: #333;
+      text-align: center;
+    `;
+
+    const icon = document.createElement('div');
+    icon.style.cssText = `
+      font-size: 48px;
+      margin-bottom: 16px;
+    `;
+    icon.textContent = '🏢';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Business Trial Already Used';
+    title.style.cssText = 'margin: 0 0 16px 0; font-size: 24px; font-weight: 600; color: #1f2937;';
+
+    const message = document.createElement('p');
+    message.innerHTML = `
+      Oops! Looks like this business profile was already attached to another account.<br><br>
+      <strong>Each business location gets one free trial per location.</strong><br>
+      If you think this is a mistake, please contact us.
+    `;
+    message.style.cssText = 'margin: 0 0 24px 0; font-size: 16px; line-height: 1.6; color: #6b7280;';
+
+    const upgradeInfo = document.createElement('div');
+    upgradeInfo.style.cssText = `
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+      text-align: left;
+    `;
+    upgradeInfo.innerHTML = `
+      <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #92400e;">💡 Next Steps:</h3>
+      <ul style="margin: 0; padding-left: 20px; color: #a16207; font-size: 14px; line-height: 1.6;">
+        <li><strong>Upgrade and claim to continue:</strong> Get unlimited access to answering this business reviews after our security check</li>
+        <li><strong>Try another business:</strong> Each location gets its own free trial</li>
+        <li><strong>Contact support:</strong> If you believe this is an error</li>
+      </ul>
+    `;
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'display: flex; gap: 12px; justify-content: center; margin-top: 24px;';
+
+    const upgradeButton = document.createElement('button');
+    upgradeButton.textContent = '⬆️ Upgrade Plan';
+    upgradeButton.style.cssText = `
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    `;
+    upgradeButton.onmouseover = () => upgradeButton.style.transform = 'scale(1.05)';
+    upgradeButton.onmouseout = () => upgradeButton.style.transform = 'scale(1)';
+
+    const contactButton = document.createElement('button');
+    contactButton.textContent = '📧 Contact Us';
+    contactButton.style.cssText = `
+      padding: 12px 24px;
+      background: #f59e0b;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s;
+    `;
+    contactButton.onmouseover = () => contactButton.style.transform = 'scale(1.05)';
+    contactButton.onmouseout = () => contactButton.style.transform = 'scale(1)';
+
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'OK';
+    cancelButton.style.cssText = `
+      padding: 12px 24px;
+      background: #f9fafb;
+      color: #374151;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    `;
+
+    const cleanup = () => {
+      if (overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+    };
+
+    upgradeButton.onclick = () => {
+      cleanup();
+      // Open extension popup for upgrade
+      chrome.runtime.sendMessage({ action: 'openUpgradeFlow' });
+      resolve(false);
+    };
+
+    contactButton.onclick = () => {
+      cleanup();
+      // Open contact/support page
+      window.open('mailto:support@replybot.ai?subject=Business Trial Issue', '_blank');
+      resolve(false);
+    };
+
+    cancelButton.onclick = () => {
+      cleanup();
+      resolve(false);
+    };
+
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve(false);
+      }
+    };
+
+    buttonContainer.appendChild(upgradeButton);
+    buttonContainer.appendChild(contactButton);
+    buttonContainer.appendChild(cancelButton);
+    modal.appendChild(icon);
+    modal.appendChild(title);
+    modal.appendChild(message);
+    modal.appendChild(upgradeInfo);
+    modal.appendChild(buttonContainer);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
+}
+
 export async function handleAIButtonClick(config: SiteRule) {
   console.log('[ClickHandler] 🚀 Starting AI response generation...');
   console.log('[ClickHandler] AI button clicked for rule:', config.id || 'Unknown');
@@ -418,6 +579,16 @@ export async function handleAIButtonClick(config: SiteRule) {
     showNotification(`AI response generated successfully! (${creditCheck.available - 1} credits remaining)`, 'success');
     
   } catch (error) {
+    // Check if it's a business trial already used error (special handling)
+    if (error instanceof Error && 
+        (error.message.includes('Free trial for this business has already been used') || 
+         error.message.includes('TRIAL_ALREADY_USED'))) {
+      console.log('[ClickHandler] 🏢 Business trial already used - showing modal instead of error');
+      updateButtonState(aiButton, 'default'); // Reset button state
+      await showBusinessTrialUsedModal();
+      return;
+    }
+    
     console.error('[ClickHandler] ❌ Error during AI response generation:', error);
     
     // Check if it's a credit-related error

@@ -851,6 +851,55 @@ async function generateAsyncAIResponse(
     // Check rate limits before making request
     await checkRateLimit();
 
+    // Extract business ID for business-level trial enforcement with retry logic
+    let businessId: string | null = null;
+    try {
+      // Try to get business ID from Google search tabs with retry mechanism
+      const tabs = await chrome.tabs.query({ 
+        url: ["*://www.google.com/search*", "*://google.com/search*"] 
+      });
+      
+      // If no search tabs found, try active tab as fallback
+      const searchTab = tabs.find(tab => tab.url?.includes('/search')) || 
+                       (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+      
+      if (searchTab?.id) {
+        // Retry up to 3 times with delays to handle content script loading timing
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const result = await chrome.tabs.sendMessage(searchTab.id, { 
+              type: 'GET_BUSINESS_ID' 
+            });
+            businessId = result?.businessId || null;
+            
+            if (businessId) {
+              log(`Business ID extracted successfully on attempt ${attempt}:`, businessId);
+              break; // Success - exit retry loop
+            } else {
+              log(`Business ID extraction attempt ${attempt} returned null`);
+              if (attempt < 3) {
+                // Wait before retry (content script might still be loading)
+                await delay(500); // 500ms delay
+              }
+            }
+          } catch (attemptError) {
+            log(`Business ID extraction attempt ${attempt} failed:`, attemptError);
+            if (attempt < 3) {
+              await delay(500); // 500ms delay before retry
+            }
+          }
+        }
+      }
+    } catch (error) {
+      log('Could not extract business ID from content script:', error);
+      // This is not critical - the system will work without business ID
+      // (though it won't enforce business-level trial locks)
+    }
+    
+    log('Final business ID for trial enforcement:', businessId);
+    log('Business ID type:', typeof businessId);
+    log('Business ID length:', businessId ? businessId.length : 'null');
+
     const requestBody = {
       userId,
       userEmail,
@@ -870,7 +919,8 @@ async function generateAsyncAIResponse(
         ],
         max_tokens: 300,
         temperature: 0.7
-      }
+      },
+      businessId: businessId // Include business ID for trial enforcement
     };
 
     log('Requesting AI generation job creation:', requestBody);
@@ -891,6 +941,13 @@ async function generateAsyncAIResponse(
         details: firebaseError.details,
         rawError: firebaseError
       });
+      
+      // Handle specific business-level errors
+      if (firebaseError.code === 'permission-denied' && 
+          firebaseError.message.includes('Free trial for this business has already been used')) {
+        throw new Error('TRIAL_ALREADY_USED');
+      }
+      
       throw new Error(`Firebase Function error: ${firebaseError.message} (${firebaseError.code})`);
     }
     
@@ -904,21 +961,30 @@ async function generateAsyncAIResponse(
         await updateLocalCreditCache(0);
         throw new Error('Insufficient credits. Please upgrade your plan to continue.');
       }
+      if (jobData.error === 'TRIAL_ALREADY_USED') {
+        throw new Error('TRIAL_ALREADY_USED');
+      }
       throw new Error(jobData.error || 'Failed to create AI generation job');
     }
 
     // Step 2: Update local credit cache immediately
-    await updateLocalCreditCache(jobData.newCreditBalance);
-    
-    // Part 3.1: Check for low credit threshold (proactive business logic)
-    if (jobData.newCreditBalance <= 5) {
-      chrome.runtime.sendMessage({
-        type: 'LOW_CREDITS_WARNING',
-        data: { 
-          credits: jobData.newCreditBalance,
-          threshold: 5
-        }
-      });
+    // Handle special admin case (9999 credits = unlimited)
+    if (jobData.newCreditBalance === 9999) {
+      log('Admin user detected - unlimited credits');
+      // Don't update cache for admin users to avoid confusion
+    } else {
+      await updateLocalCreditCache(jobData.newCreditBalance);
+      
+      // Part 3.1: Check for low credit threshold (proactive business logic)
+      if (jobData.newCreditBalance <= 5) {
+        chrome.runtime.sendMessage({
+          type: 'LOW_CREDITS_WARNING',
+          data: { 
+            credits: jobData.newCreditBalance,
+            threshold: 5
+          }
+        });
+      }
     }
 
     // Step 3: Setup temporary listener for job completion

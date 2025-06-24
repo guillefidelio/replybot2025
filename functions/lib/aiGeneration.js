@@ -41,6 +41,8 @@ const db = admin.firestore();
 /**
  * Part 1.2: Lightning-Fast Callable Function - requestAIGeneration
  * Atomically consumes credit and creates job, returns immediately (< 500ms)
+ *
+ * NEW: Implements business-level free trial lock with admin override
  */
 exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
     const startTime = Date.now();
@@ -49,19 +51,90 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
         if (!context.auth) {
             throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
         }
-        const { userId, userEmail, systemPrompt, userPrompt, reviewData, aiRequest } = data;
+        const { userId, userEmail, systemPrompt, userPrompt, reviewData, aiRequest, businessId } = data;
         if (!userId || !userEmail || !systemPrompt || !userPrompt || !aiRequest) {
             throw new functions.https.HttpsError('invalid-argument', 'Missing required fields');
         }
-        // ATOMIC TRANSACTION: Credit consumption + Job creation
+        // DEBUG: Log business ID information
+        console.log(`[DEBUG] Request from user ${userId}`);
+        console.log(`[DEBUG] Business ID received:`, businessId);
+        console.log(`[DEBUG] Business ID type:`, typeof businessId);
+        console.log(`[DEBUG] Business ID length:`, businessId ? businessId.length : 'null');
+        // ATOMIC TRANSACTION: Admin check + Business lock check + Credit consumption + Job creation
         const result = await db.runTransaction(async (transaction) => {
-            // READ: Get user document
+            var _a;
+            // STEP 1: Get user document and check for admin role
             const userRef = db.collection('users').doc(userId);
             const userDoc = await transaction.get(userRef);
             if (!userDoc.exists) {
                 throw new Error('User not found');
             }
             const userData = userDoc.data();
+            const userRole = userData.role;
+            // STEP 2: Admin Bypass Logic
+            if (userRole === 'admin') {
+                console.log(`[Admin Access] User ${userId} is admin - bypassing all checks`);
+                // CREATE JOB: Add to generation jobs collection (no credit consumption for admins)
+                const jobRef = db.collection('users').doc(userId).collection('generationJobs').doc();
+                const jobId = jobRef.id;
+                const jobData = {
+                    id: jobId,
+                    userId,
+                    status: 'pending',
+                    systemPrompt,
+                    userPrompt,
+                    reviewData,
+                    aiRequest,
+                    createdAt: admin.firestore.FieldValue.serverTimestamp()
+                };
+                transaction.set(jobRef, jobData);
+                // CREATE TRANSACTION RECORD (for audit purposes, but no credit deduction)
+                const transactionRef = db.collection('users').doc(userId).collection('creditTransactions').doc();
+                transaction.set(transactionRef, {
+                    id: transactionRef.id,
+                    userId,
+                    type: 'admin_usage',
+                    amount: 0, // No credit consumed for admins
+                    operation: 'async_ai_generation_admin',
+                    metadata: {
+                        jobId,
+                        reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
+                        responseType: 'async_ai_generated_admin',
+                        businessId: businessId || 'unknown'
+                    },
+                    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+                    balanceAfter: 9999, // Special value to indicate unlimited
+                    description: `Admin AI generation job ${jobId} created`
+                });
+                return {
+                    success: true,
+                    jobId,
+                    newCreditBalance: 9999 // Special value to indicate unlimited for UI
+                };
+            }
+            // STEP 3: For non-admin users, check business trial lock
+            if (businessId) {
+                console.log(`[DEBUG] Checking business trial for ID: ${businessId}`);
+                // Use a single document per business for atomic trial tracking
+                const businessLockRef = db.collection('businessLocks').doc(businessId);
+                const businessLockDoc = await transaction.get(businessLockRef);
+                if (businessLockDoc.exists) {
+                    const lockData = businessLockDoc.data();
+                    console.log(`[Business Lock BLOCKED] Business ${businessId} trial already used by user ${lockData.firstUsedBy} (${lockData.userEmail})`);
+                    console.log(`[Business Lock BLOCKED] Current user ${userId} (${userEmail}) attempting to use trial again`);
+                    console.log(`[Business Lock BLOCKED] Lock document path: businessLocks/${businessId}`);
+                    console.log(`[Business Lock BLOCKED] First used on: ${(_a = lockData.firstUsedAt) === null || _a === void 0 ? void 0 : _a.toDate()}`);
+                    return {
+                        success: false,
+                        error: 'TRIAL_ALREADY_USED'
+                    };
+                }
+                console.log(`[DEBUG] Business ${businessId} trial available`);
+            }
+            else {
+                console.log(`[DEBUG] No business ID provided - skipping business lock check`);
+            }
+            // STEP 4: Standard user credit validation
             const credits = userData.credits || {};
             const currentCredits = credits.available || 0;
             // CHECK: Validate credits
@@ -71,7 +144,7 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
                     error: 'INSUFFICIENT_CREDITS'
                 };
             }
-            // CONSUME CREDIT: Update user document
+            // STEP 5: CONSUME CREDIT: Update user document
             const newCredits = currentCredits - 1;
             const newUsed = (credits.used || 0) + 1;
             transaction.update(userRef, {
@@ -79,7 +152,22 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
                 'credits.used': newUsed,
                 'credits.lastUsage': admin.firestore.FieldValue.serverTimestamp()
             });
-            // CREATE JOB: Add to generation jobs collection
+            // STEP 6: CREATE BUSINESS LOCK (if businessId provided)
+            if (businessId) {
+                const businessLockRef = db.collection('businessLocks').doc(businessId);
+                // Create the lock atomically (will only succeed if document doesn't exist)
+                transaction.set(businessLockRef, {
+                    businessId,
+                    firstUsedBy: userId,
+                    firstUsedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    userEmail,
+                    reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
+                    extractionMethod: 'data-lid' // Track how business ID was extracted
+                });
+                console.log(`[Business Lock Created] Business ${businessId} marked as trial used by user ${userId}`);
+                console.log(`[Business Lock Created] Lock document path: businessLocks/${businessId}`);
+            }
+            // STEP 7: CREATE JOB: Add to generation jobs collection
             const jobRef = db.collection('users').doc(userId).collection('generationJobs').doc();
             const jobId = jobRef.id;
             const jobData = {
@@ -93,7 +181,7 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
                 createdAt: admin.firestore.FieldValue.serverTimestamp()
             };
             transaction.set(jobRef, jobData);
-            // CREATE TRANSACTION RECORD
+            // STEP 8: CREATE TRANSACTION RECORD
             const transactionRef = db.collection('users').doc(userId).collection('creditTransactions').doc();
             transaction.set(transactionRef, {
                 id: transactionRef.id,
@@ -104,7 +192,8 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
                 metadata: {
                     jobId,
                     reviewId: reviewData === null || reviewData === void 0 ? void 0 : reviewData.id,
-                    responseType: 'async_ai_generated'
+                    responseType: 'async_ai_generated',
+                    businessId: businessId || 'unknown'
                 },
                 timestamp: admin.firestore.FieldValue.serverTimestamp(),
                 balanceAfter: newCredits,
@@ -120,9 +209,12 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
         console.log(`[requestAIGeneration] Execution time: ${executionTime}ms`);
         // Handle transaction results
         if (!result.success) {
-            console.log(`[Credit Check Failed] User ${userId}: ${result.error}`);
+            console.log(`[Request Failed] User ${userId}: ${result.error}`);
             if (result.error === 'INSUFFICIENT_CREDITS') {
                 throw new functions.https.HttpsError('resource-exhausted', 'Insufficient credits');
+            }
+            if (result.error === 'TRIAL_ALREADY_USED') {
+                throw new functions.https.HttpsError('permission-denied', 'Free trial for this business has already been used. Please upgrade to continue.');
             }
             throw new functions.https.HttpsError('internal', result.error || 'Transaction failed');
         }
@@ -138,7 +230,8 @@ exports.requestAIGeneration = functions.https.onCall(async (data, context) => {
         // Log failed operation
         await (0, audit_1.logAIGeneration)(data.userId || 'unknown', 'failed', 'request_failed', {
             error: error instanceof Error ? error.message : 'Unknown error',
-            executionTime
+            executionTime,
+            businessId: data.businessId || 'unknown'
         });
         // Re-throw Firebase errors, wrap others
         if (error instanceof functions.https.HttpsError) {

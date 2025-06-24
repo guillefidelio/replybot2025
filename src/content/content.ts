@@ -1,6 +1,9 @@
 // Chrome extension content script for Google My Business review pages
 // Detects reviews and injects "Respond with AI" buttons
 
+// Business ID extraction is handled by content_script_google.ts for Google search pages
+// import { extractBusinessId } from '../utils/dom-utils';
+
 interface ReviewData {
   id: string;
   reviewer: string;
@@ -31,8 +34,8 @@ interface CreditCheckResult {
 // Check if the script has already been injected to avoid re-initialization
 if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResponderInitialized) {
   console.log('AI Review Responder already initialized. Aborting.');
-} else {
-  (window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResponderInitialized = true;
+  } else {
+    (window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResponderInitialized = true;
 
   class ReviewDetector {
     private observer: MutationObserver | null = null;
@@ -45,6 +48,7 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
       this.init();
       this.setupAuthListener();
       this.setupAIResponseListener();
+      this.setupMessageListener(); // Add message listener for business ID requests
     }
 
     private async loadSettings() {
@@ -109,6 +113,169 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
           canProceed: false
         };
       }
+    }
+
+    /**
+     * Show modal when business trial has already been used
+     */
+    private showTrialAlreadyUsedModal(): Promise<boolean> {
+      return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.6);
+          z-index: 10004;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: 'Google Sans', Roboto, Arial, sans-serif;
+        `;
+
+        const modal = document.createElement('div');
+        modal.style.cssText = `
+          background: white;
+          border-radius: 16px;
+          padding: 32px;
+          max-width: 450px;
+          width: 90%;
+          box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+          color: #333;
+          text-align: center;
+        `;
+
+        const icon = document.createElement('div');
+        icon.style.cssText = `
+          font-size: 48px;
+          margin-bottom: 16px;
+        `;
+        icon.textContent = '🔒';
+
+        const title = document.createElement('h2');
+        title.textContent = 'Trial Already Used';
+        title.style.cssText = 'margin: 0 0 16px 0; font-size: 24px; font-weight: 600; color: #1f2937;';
+
+        const message = document.createElement('p');
+        message.innerHTML = `
+          The free trial for this business location has already been used.<br><br>
+          Each Google Business Profile can only use the free trial once to prevent abuse.
+        `;
+        message.style.cssText = 'margin: 0 0 24px 0; font-size: 16px; line-height: 1.6; color: #6b7280;';
+
+        const upgradeInfo = document.createElement('div');
+        upgradeInfo.style.cssText = `
+          background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+          border-radius: 12px;
+          padding: 20px;
+          margin: 20px 0;
+          text-align: left;
+        `;
+        upgradeInfo.innerHTML = `
+          <h3 style="margin: 0 0 12px 0; font-size: 16px; color: #374151;">🚀 To continue using AI responses:</h3>
+          <ul style="margin: 0; padding-left: 20px; color: #6b7280; font-size: 14px; line-height: 1.6;">
+            <li><strong>Starter Plan:</strong> 100 credits/month + bulk processing</li>
+            <li><strong>Professional Plan:</strong> 500 credits/month + advanced features</li>
+            <li><strong>Free Plan:</strong> 10 credits/month (resets monthly)</li>
+          </ul>
+        `;
+
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.cssText = 'display: flex; gap: 12px; justify-content: center; margin-top: 24px;';
+
+        const upgradeButton = document.createElement('button');
+        upgradeButton.textContent = '⬆️ Upgrade Plan';
+        upgradeButton.style.cssText = `
+          padding: 12px 24px;
+          background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+          color: white;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: transform 0.2s;
+        `;
+
+        upgradeButton.addEventListener('mouseenter', () => {
+          upgradeButton.style.transform = 'scale(1.05)';
+        });
+
+        upgradeButton.addEventListener('mouseleave', () => {
+          upgradeButton.style.transform = 'scale(1)';
+        });
+
+        const cancelButton = document.createElement('button');
+        cancelButton.textContent = 'Close';
+        cancelButton.style.cssText = `
+          padding: 12px 24px;
+          background: #f3f4f6;
+          color: #374151;
+          border: none;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        `;
+
+        cancelButton.addEventListener('mouseenter', () => {
+          cancelButton.style.backgroundColor = '#e5e7eb';
+        });
+
+        cancelButton.addEventListener('mouseleave', () => {
+          cancelButton.style.backgroundColor = '#f3f4f6';
+        });
+
+        upgradeButton.addEventListener('click', () => {
+          // Open upgrade URL in new tab
+          chrome.runtime.sendMessage({
+            action: 'openUpgradeTab'
+          });
+          document.body.removeChild(overlay);
+          resolve(true);
+        });
+
+        cancelButton.addEventListener('click', () => {
+          document.body.removeChild(overlay);
+          resolve(false);
+        });
+
+        const cleanup = () => {
+          if (document.body.contains(overlay)) {
+            document.body.removeChild(overlay);
+          }
+          resolve(false);
+        };
+
+        // ESC key handler
+        const escHandler = (e: KeyboardEvent) => {
+          if (e.key === 'Escape') {
+            document.removeEventListener('keydown', escHandler);
+            cleanup();
+          }
+        };
+        document.addEventListener('keydown', escHandler);
+
+        // Click outside handler
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) {
+            cleanup();
+          }
+        });
+
+        buttonContainer.appendChild(upgradeButton);
+        buttonContainer.appendChild(cancelButton);
+        modal.appendChild(icon);
+        modal.appendChild(title);
+        modal.appendChild(message);
+        modal.appendChild(upgradeInfo);
+        modal.appendChild(buttonContainer);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+      });
     }
 
     /**
@@ -301,6 +468,14 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
       });
     }
 
+    private setupMessageListener() {
+      // Note: GET_BUSINESS_ID is handled by content_script_google.js for Google search pages
+      // This content script only handles business.google.com pages
+      // No message listeners needed currently for this script
+    }
+
+    // No additional functionality needed for this script currently
+
     private handleAIResponseCompleted(data: { reviewId: string; responseText: string; creditsRemaining: number }) {
       const { reviewId, responseText, creditsRemaining } = data;
       
@@ -346,6 +521,12 @@ if ((window as Window & { aiReviewResponderInitialized?: boolean }).aiReviewResp
       const reviewData = this.findReviewById(reviewId);
       if (!reviewData) {
         console.warn('[ReviewDetector] Could not find review for failed AI response:', reviewId);
+        return;
+      }
+
+      // Handle specific error types
+      if (error === 'TRIAL_ALREADY_USED') {
+        this.showTrialAlreadyUsedModal();
         return;
       }
 
