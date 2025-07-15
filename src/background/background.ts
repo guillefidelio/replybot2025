@@ -695,7 +695,7 @@ async function handleGenerateResponse(
     }
 
     // Build prompts for OpenAI
-    const systemPrompt = `You are a professional business owner responding to a customer review.\n\nPlease generate a professional, personalized response based on this template:\n"${promptTemplate}"\n\nMake the response:\n- Professional and courteous\n- Personalized to the specific review\n- Appropriate for the rating given\n- Around 1-2 sentences for ratings 4-5, slightly longer for lower ratings\n- Natural and authentic, not robotic\n\nGenerate only the response text, no additional formatting or quotes.`;
+    const systemPrompt = `${promptTemplate}`;
 
     const userPrompt = `Review by ${reviewData.reviewer || 'Anonymous'} (${rating}/5 stars): ${reviewData.text || 'No text provided'}`;
 

@@ -53,8 +53,7 @@ export type MessageType =
   | 'POST_REVIEW_RESPONSE'
   | 'GET_REVIEW_DATA'
   | 'NOTIFICATION_SHOW'
-  | 'STORAGE_GET'
-  | 'STORAGE_SET';
+;
 
 export interface APIResponse<T = any> {
   success: boolean;
@@ -89,30 +88,7 @@ export interface SettingsValidationResult {
   errors: ValidationError[];
 }
 
-// Storage Info Interface
-export interface StorageInfo {
-  used: number;
-  quota: number;
-  available: number;
-  usagePercentage: number;
-}
 
-// Usage Statistics Interface
-export interface UsageStats {
-  totalResponses: number;
-  responsesByRating: { [rating: number]: number };
-  apiCalls: number;
-  lastUsed: string | null;
-}
-
-// Export Data Structure
-export interface ExportData {
-  version: string;
-  exportDate: string;
-  settings: ExtensionSettings;
-  prompts: { [key: string]: any };
-  usageStats: UsageStats;
-}
 
 // Import Result Interface
 export interface ImportResult {

@@ -89,7 +89,7 @@ export function PopupAuthWrapper() {
               id="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               required
             />
           </div>
@@ -103,7 +103,7 @@ export function PopupAuthWrapper() {
               id="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               required
             />
           </div>
@@ -118,7 +118,7 @@ export function PopupAuthWrapper() {
                 id="confirmPassword"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 required
                 minLength={6}
               />
@@ -128,7 +128,7 @@ export function PopupAuthWrapper() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full py-2 px-4 rounded-md text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-violet-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full py-2 px-4 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isLoading 
               ? (isLoginMode ? 'Signing In...' : 'Creating Account...') 
@@ -142,7 +142,7 @@ export function PopupAuthWrapper() {
             {isLoginMode ? "Don't have an account?" : "Already have an account?"}{' '}
             <button
               onClick={toggleAuthMode}
-              className="text-violet-600 hover:text-violet-500 font-medium"
+              className="text-blue-600 hover:text-blue-500 font-medium"
             >
               {isLoginMode ? 'Sign up' : 'Sign in'}
             </button>

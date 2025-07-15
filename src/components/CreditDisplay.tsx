@@ -193,7 +193,7 @@ export function CreditDisplay({ onUpgradeClick }: CreditDisplayProps) {
       {/* Credit Count */}
       <div className="flex items-baseline justify-between mb-2">
         <div>
-          <span className="text-2xl font-bold text-gray-900">{creditInfo.available}</span>
+          <span className="text-xl font-bold text-gray-900">{creditInfo.available}</span>
           <span className="text-sm text-gray-600 ml-1">/ {creditInfo.total}</span>
         </div>
         <span className="text-sm text-gray-600">{getUsagePercentage()}% used</span>
@@ -243,23 +243,6 @@ export function CreditDisplay({ onUpgradeClick }: CreditDisplayProps) {
           </svg>
         </button>
       </div>
-
-      {/* Usage Insights */}
-      {creditInfo.used > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-100">
-          <div className="flex items-center justify-between text-xs text-gray-600">
-            <span>This period</span>
-            <span>{creditInfo.used} credit{creditInfo.used !== 1 ? 's' : ''} used</span>
-          </div>
-          
-          {/* Usage breakdown could be added here in the future */}
-          {creditInfo.used >= 5 && (
-            <div className="mt-2 p-2 bg-blue-50 rounded text-xs text-blue-700">
-              💡 You're actively using AI responses! Consider upgrading for more credits and bulk features.
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Low Credit Warning with Enhanced Notifications */}
       {creditInfo.available <= 2 && (

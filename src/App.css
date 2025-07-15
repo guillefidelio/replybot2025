@@ -1,6 +1,6 @@
 /* App-specific styles using Tailwind v4 brand guide */
 #root {
-  @apply max-w-screen-xl mx-auto p-8 text-center font-body;
+  @apply max-w-screen-xl mx-auto p-4 text-center font-body;
 }
 
 .logo {
@@ -34,7 +34,7 @@
 
 .card {
   @apply card card-hover;
-  padding: 2em;
+  padding: 1em;
 }
 
 .read-the-docs {
