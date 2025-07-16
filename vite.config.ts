@@ -47,6 +47,7 @@ export default defineConfig({
           }
           return 'src/[name]/[name].js';
         },
+        // Only allow chunks if we explicitly need them
         chunkFileNames: 'chunks/[name]-[hash].js',
         assetFileNames: (assetInfo) => {
           // Handle CSS files
@@ -58,10 +59,33 @@ export default defineConfig({
           }
           return 'assets/[name]-[hash][extname]';
         },
-        // Disable module preloading for service worker compatibility
+        // Keep dynamic imports disabled for compatibility
         inlineDynamicImports: false,
-        manualChunks: undefined, // Prevent chunking for background script
+        // Sophisticated chunking strategy - minimize Firebase chunks
+        manualChunks: (id) => {
+          // Only create chunks for very specific cases
+          // Force Firebase to be included in main files instead of separate chunks
+          if (id.includes('firebase') || id.includes('@firebase')) {
+            return undefined; // Include in main entry files
+          }
+          
+          // Force all node_modules (except Firebase) to be included in main files
+          if (id.includes('node_modules')) {
+            return undefined; // Include in main entry files
+          }
+          
+          // Don't create chunks for any other dependencies
+          return undefined;
+        },
       },
+      // Optimize for tree-shaking
+      treeshake: {
+        moduleSideEffects: false,
+        propertyReadSideEffects: false,
+        tryCatchDeoptimization: false,
+      },
+      // External dependencies - force bundling of Firebase
+      external: [],
     },
     // Ensure compatibility with Chrome extension environment
     target: 'esnext',
@@ -70,6 +94,12 @@ export default defineConfig({
     copyPublicDir: false,
     // Disable module preloading for service worker compatibility
     modulePreload: false,
+    // Optimize bundle size
+    chunkSizeWarningLimit: 1000,
+    // Disable source maps in production for smaller bundle
+    sourcemap: false,
+    // Force more aggressive bundling
+    assetsInlineLimit: 0, // Don't inline assets
   },
   // Configure for Chrome extension development
   define: {
@@ -77,5 +107,17 @@ export default defineConfig({
     // Inject MVP environment variables at build time
     __VITE_API_URL__: JSON.stringify(process.env.VITE_API_URL || 'http://localhost:3000'),
     __VITE_OPENAI_API_KEY__: JSON.stringify(process.env.VITE_OPENAI_API_KEY || ''),
+  },
+  // Optimize dependencies
+  optimizeDeps: {
+    include: [
+      'firebase/app',
+      'firebase/auth',
+      'firebase/firestore',
+      'firebase/functions'
+    ],
+    exclude: [
+      // Exclude any packages that should not be pre-bundled
+    ]
   },
 })

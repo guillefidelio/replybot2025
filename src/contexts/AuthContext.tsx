@@ -11,9 +11,22 @@ import {
 } from 'firebase/auth';
 import { auth } from '../firebase';
 import type { AuthContextType, FirebaseError } from '../types/firebase';
-import { PromptSyncService } from '../services/PromptSyncService';
-import { UserService } from '../services/UserService';
-import { UserMigrationService } from '../services/UserMigrationService';
+
+// Dynamic import helpers for Firebase services
+const getPromptSyncService = async () => {
+  const module = await import('../services/PromptSyncService');
+  return module.PromptSyncService;
+};
+
+const getUserService = async () => {
+  const module = await import('../services/UserService');
+  return module.UserService;
+};
+
+const getUserMigrationService = async () => {
+  const module = await import('../services/UserMigrationService');
+  return module.UserMigrationService;
+};
 
 // Create the context
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -50,6 +63,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         });
         
         // Automatically create user document in Firestore
+        const UserService = await getUserService();
         await UserService.createUserDocument(result.user);
         console.log('User document created successfully on signup');
       }
@@ -82,6 +96,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // Perform final sync before signing out if user exists
       if (user) {
         try {
+          const PromptSyncService = await getPromptSyncService();
           await PromptSyncService.syncOnLogout(user);
           console.log('Final prompt sync completed before logout');
         } catch (syncError) {
@@ -138,9 +153,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // User signed in - ensure user document exists and update last login
         try {
           // Ensure user document exists (handles both new and existing users)
+          const UserService = await getUserService();
           await UserService.ensureUserDocument(user);
           
           // Check and migrate user to new payment system if needed
+          const UserMigrationService = await getUserMigrationService();
           const migrationResult = await UserMigrationService.checkAndMigrateUser(user);
           if (migrationResult.migrated) {
             console.log(`User ${user.email} successfully migrated to payment system`);
@@ -177,6 +194,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           } catch (handshakeError) {
             console.error('Failed to initiate handshake:', handshakeError);
             // Fallback to legacy prompt sync
+            const PromptSyncService = await getPromptSyncService();
             await PromptSyncService.syncOnLogin(user);
             console.log('Fell back to legacy prompt sync');
           }

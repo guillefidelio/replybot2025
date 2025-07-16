@@ -1,12 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { PopupAuthWrapper } from '../components/Auth/PopupAuthWrapper';
-import { PromptSyncService } from '../services/PromptSyncService';
-import { CreditDisplay } from '../components/CreditDisplay';
-import { UpgradeModal } from '../components/UpgradeModal';
 import '../index.css';
 
+// Lazy load Firebase-dependent components
+const CreditDisplay = lazy(() => import('../components/CreditDisplay').then(module => ({ default: module.CreditDisplay })));
+const UpgradeModal = lazy(() => import('../components/UpgradeModal').then(module => ({ default: module.UpgradeModal })));
+
+// Dynamic import helper for PromptSyncService
+const getPromptSyncService = async () => {
+  const module = await import('../services/PromptSyncService');
+  return module.PromptSyncService;
+};
 
 // Types
 interface ExtensionSettings {
@@ -52,6 +58,13 @@ const sendMessage = (message: BackgroundMessage): Promise<BackgroundResponse> =>
     });
   });
 };
+
+// Loading component for lazy-loaded Firebase components
+const FirebaseComponentLoader: React.FC = () => (
+  <div className="flex items-center justify-center h-20">
+    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+  </div>
+);
 
 // Header Component with Authentication
 const PopupHeader: React.FC = () => {
@@ -176,7 +189,9 @@ const DashboardTab: React.FC<{
       {/* Credit Management Section */}
       <div>
         <h3 className="text-xl font-semibold leading-tight text-slate-700 dark:text-slate-300 mb-4">Credit Management</h3>
-        <CreditDisplay onUpgradeClick={onShowUpgrade} />
+        <Suspense fallback={<FirebaseComponentLoader />}>
+          <CreditDisplay onUpgradeClick={onShowUpgrade} />
+        </Suspense>
       </div>
     </div>
   );
@@ -197,6 +212,7 @@ const PromptsTab: React.FC<{
     // Load effective prompts (local or defaults)
     const loadPrompts = async () => {
       try {
+        const PromptSyncService = await getPromptSyncService();
         const effectivePrompts = await PromptSyncService.getEffectivePrompts();
         setPrompts(effectivePrompts);
         setHasUnsavedChanges(false);
@@ -227,6 +243,7 @@ const PromptsTab: React.FC<{
     setIsSaving(true);
     try {
       // Use the prompt sync service for authenticated users
+      const PromptSyncService = await getPromptSyncService();
       await PromptSyncService.savePrompts(user, prompts);
       setHasUnsavedChanges(false);
       
@@ -731,13 +748,15 @@ const AuthenticatedPopupApp: React.FC = () => {
       )}
 
       {showUpgradeModal && (
-        <UpgradeModal
-          isOpen={showUpgradeModal}
-          onClose={handleCloseUpgrade}
-          currentCredits={creditInfo.available}
-          requiredCredits={creditInfo.required}
-          trigger="manual"
-        />
+        <Suspense fallback={<FirebaseComponentLoader />}>
+          <UpgradeModal
+            isOpen={showUpgradeModal}
+            onClose={handleCloseUpgrade}
+            currentCredits={creditInfo.available}
+            requiredCredits={creditInfo.required}
+            trigger="manual"
+          />
+        </Suspense>
       )}
     </div>
   );
