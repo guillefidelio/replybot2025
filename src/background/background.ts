@@ -1,18 +1,10 @@
 // Background service worker for AI Review Responder Chrome Extension
 // Handles API communications via Google Cloud Function (secure OpenAI proxy)
 
-// Dynamic import helpers for Firebase (avoiding static import issues)
-const getFirebaseFunctions = async () => {
-  const { httpsCallable, getFunctions } = await import('firebase/functions');
-  const app = (await import('../firebase')).default;
-  return { httpsCallable, getFunctions, app };
-};
-
-const getFirebaseFirestore = async () => {
-  const { doc, onSnapshot } = await import('firebase/firestore');
-  const { db } = await import('../firebase');
-  return { doc, onSnapshot, db };
-};
+// Static imports for Firebase (required for service worker context)
+import { httpsCallable, getFunctions } from 'firebase/functions';
+import { doc, onSnapshot } from 'firebase/firestore';
+import app, { db } from '../firebase';
 
 // Google Cloud Function API configuration
 const CLOUD_FUNCTION_URL = 'https://us-central1-review-responder-backend.cloudfunctions.net/openai-proxy';
@@ -172,10 +164,9 @@ const performHandshake = async (user: { uid: string; email: string }): Promise<b
   try {
     log('Performing handshake for user:', user.uid);
     
-          // Use static imports instead of dynamic imports
-      const { httpsCallable, getFunctions, app } = await getFirebaseFunctions();
-      
-      const getUserSessionData = httpsCallable(getFunctions(app), 'getUserSessionData');
+          // Use static imports
+      const functions = getFunctions(app);
+      const getUserSessionData = httpsCallable(functions, 'getUserSessionData');
     const sessionData = await getUserSessionData() as { data: SessionData };
     
     log('Handshake successful, received data:', sessionData.data);
@@ -250,11 +241,9 @@ async function setupIntelligentSubscriptionListener(): Promise<void> {
       subscriptionUnsubscribe = null;
     }
 
-    // Use static imports
-    const { doc, onSnapshot } = await getFirebaseFirestore();
-    const { db } = await import('../firebase');
-    const userId = authResult.authUser.uid;
-    const userDocRef = doc(db, 'users', userId);
+          // Use static imports
+      const userId = authResult.authUser.uid;
+      const userDocRef = doc(db, 'users', userId);
     
     log(`Setting up targeted subscription listener for user ${userId}`);
 
@@ -936,8 +925,8 @@ async function generateAsyncAIResponse(
     log('Requesting AI generation job creation:', requestBody);
 
     // Step 1: Request job creation using Firebase Functions SDK (fast, < 500ms)
-    const { httpsCallable, getFunctions, app } = await getFirebaseFunctions();
-    const requestAIGeneration = httpsCallable(getFunctions(app), 'requestAIGeneration');
+    const functions = getFunctions(app);
+    const requestAIGeneration = httpsCallable(functions, 'requestAIGeneration');
     
     let result: any;
     try {
@@ -1040,14 +1029,12 @@ async function updateLocalCreditCache(newCredits: number): Promise<void> {
 
 // Helper function to wait for job completion using temporary onSnapshot listener
 async function waitForJobCompletion(userId: string, jobId: string): Promise<string> {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     try {
       // Use static imports
       log(`Setting up temporary listener for job ${jobId}`);
       
       // Setup temporary listener on the specific job document
-      const { doc, onSnapshot } = await getFirebaseFirestore();
-      const { db } = await import('../firebase');
       const jobDocRef = doc(db, 'users', userId, 'generationJobs', jobId);
       
       let unsubscribe: (() => void) | null = null;
